@@ -775,7 +775,17 @@ tbody tr.tr-over:hover { background: var(--red-s); }
 /* ── Phone ───────────────────────────────────────── */
 @media (max-width: 640px) {
   /* header */
-  .hdr { height: 56px; padding: 0 14px; gap: 8px; }
+  .hdr {
+    height: 56px;
+    padding: 0 14px;
+    gap: 8px;
+    /* backdrop-filter would make .hdr the containing block of the fixed
+       bottom nav below, pinning it inside the 56px header instead of the
+       viewport bottom. */
+    background: var(--surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
   .hdr-r { margin-left: auto; }
   .brand-ico { font-size: 20px; }
   .brand-tag { display: none; }
