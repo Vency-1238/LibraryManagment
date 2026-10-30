@@ -14,7 +14,7 @@ const char* WIFI_PASSWORD = "11111111";
 // Your DEPLOYED website URL (no trailing slash).
 // Vercel example: "https://rfid-library.vercel.app"
 // For local testing you may use "http://10.236.200.250:3000".
-const char* API_BASE_URL = "https://your-app.vercel.app";
+const char* API_BASE_URL = "https://website-iota-neon-f8wki3ldia.vercel.app";
 
 // ================ RFID PINS ====================
 constexpr uint8_t RFID_SS_PIN   = 5;
@@ -44,8 +44,16 @@ bool apiUsesTls() {
   return String(API_BASE_URL).startsWith("https://");
 }
 
+String apiBase() {
+  String base = String(API_BASE_URL);
+  while (base.endsWith("/")) {
+    base.remove(base.length() - 1);
+  }
+  return base;
+}
+
 String apiUrl(const String& path) {
-  return String(API_BASE_URL) + path;
+  return apiBase() + path;
 }
 
 bool apiBegin(HTTPClient& http, const String& url) {

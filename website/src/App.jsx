@@ -224,7 +224,7 @@ function Dashboard({ students, books, borrowings }) {
       <div className="panel">
         <div className="pnl-hd">
           <h3>Recent Activity</h3>
-          <span className="pnl-cnt">{borrowings.length} total records</span>
+          <span className="pnl-cnt">{borrowings.length} total record{borrowings.length === 1 ? "" : "s"}</span>
         </div>
         {recent.length === 0 ? (
           <EmptyState icon="📋" msg="No borrowing activity yet." />
@@ -320,7 +320,7 @@ function StudentsPage({ students, onRefresh, toast }) {
       <div className="panel">
         <div className="pnl-bar">
           <Searchbar value={q} onChange={setQ} placeholder="Search by name, ID or UID…" />
-          <span className="cnt-chip">{list.length} students</span>
+          <span className="cnt-chip">{list.length} student{list.length === 1 ? "" : "s"}</span>
         </div>
 
         {list.length === 0 ? (
@@ -453,7 +453,7 @@ function BooksPage({ books, onRefresh, toast }) {
       <div className="panel">
         <div className="pnl-bar">
           <Searchbar value={q} onChange={setQ} placeholder="Search by title, ID or UID…" />
-          <span className="cnt-chip">{list.length} books</span>
+          <span className="cnt-chip">{list.length} book{list.length === 1 ? "" : "s"}</span>
         </div>
 
         {list.length === 0 ? (
