@@ -6,64 +6,173 @@
 #include <SPI.h>
 #include <MFRC522.h>
 
-// ================ WIFI SETTINGS ================
+// =============== WIFI SETTINGS ===============
 const char* WIFI_SSID = "Network";
 const char* WIFI_PASSWORD = "11111111";
 
-// ================ API SETTINGS =================
-// Your DEPLOYED website URL (no trailing slash).
-// Vercel example: "https://rfid-library.vercel.app"
-// For local testing you may use "http://10.236.200.250:3000".
-const char* API_BASE_URL = "https://website-iota-neon-f8wki3ldia.vercel.app";
+// =============== WEBSITE API =================
+const char* API_BASE_URL =
+  "https://website-iota-neon-f8wki3ldia.vercel.app";
 
-// ================ RFID PINS ====================
-constexpr uint8_t RFID_SS_PIN   = 5;
-constexpr uint8_t RFID_RST_PIN  = 22;
-constexpr uint8_t RFID_SCK_PIN  = 18;
-constexpr uint8_t RFID_MISO_PIN = 19;
-constexpr uint8_t RFID_MOSI_PIN = 23;
+// =============== RFID PINS ===================
+#define RFID_SS_PIN   5
+#define RFID_RST_PIN  22
+#define RFID_SCK_PIN  18
+#define RFID_MISO_PIN 19
+#define RFID_MOSI_PIN 23
 
 MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
 
-// ================ SESSION ======================
+WiFiClientSecure tlsClient;
+WiFiClient plainClient;
+
+// =============== SESSION DATA =================
 String activeStudentId = "";
 String activeStudentName = "";
 bool waitingForBook = false;
 
-// Prevent repeated processing of a card held on the reader
 String lastProcessedUID = "";
 unsigned long lastProcessedTime = 0;
-const unsigned long SCAN_COOLDOWN = 1200;
+const unsigned long SCAN_COOLDOWN_MS = 1500;
 
-// ================ API URL ======================
-// Vercel serves over HTTPS; a plain WiFiClient is used only for http:// URLs.
-WiFiClientSecure tlsClient;
-WiFiClient plainClient;
-
-bool apiUsesTls() {
-  return String(API_BASE_URL).startsWith("https://");
-}
-
+// =============== API URL ======================
 String apiBase() {
   String base = String(API_BASE_URL);
+
   while (base.endsWith("/")) {
     base.remove(base.length() - 1);
   }
+
   return base;
 }
 
 String apiUrl(const String& path) {
-  return apiBase() + path;
+  if (path.startsWith("/")) {
+    return apiBase() + path;
+  }
+
+  return apiBase() + "/" + path;
 }
 
-bool apiBegin(HTTPClient& http, const String& url) {
-  if (apiUsesTls()) {
+// =============== HTTP INITIALIZATION ==========
+bool beginHttp(HTTPClient& http, const String& url) {
+  http.setConnectTimeout(10000);
+  http.setTimeout(15000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+  if (url.startsWith("https://")) {
     return http.begin(tlsClient, url);
   }
+
   return http.begin(plainClient, url);
 }
 
-// ================ UID CONVERSION ===============
+// =============== HTTP RESPONSE =================
+void printHttpResult(int status, const String& response) {
+  Serial.print("[HTTP] Status: ");
+  Serial.println(status);
+
+  if (response.length() > 0) {
+    Serial.println("[HTTP] Response:");
+    Serial.println(response);
+  }
+
+  if (status == 404 &&
+      response.indexOf("No route for") >= 0) {
+    Serial.println("[API ERROR] Vercel API route is not resolving.");
+    Serial.println("[API ERROR] Check the website/api/*.js functions");
+  }
+  else if (status == 404) {
+    Serial.println("[API ERROR] Endpoint or registered UID not found.");
+  }
+  else if (status >= 500) {
+    Serial.println("[API ERROR] Server error.");
+  }
+}
+
+// =============== POST JSON =====================
+bool postJson(
+  const String& path,
+  const String& payload,
+  String& responseBody,
+  int& statusCode
+) {
+  responseBody = "";
+  statusCode = -1;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WiFi] Not connected.");
+    return false;
+  }
+
+  String url = apiUrl(path);
+
+  HTTPClient http;
+
+  Serial.println();
+  Serial.println("[HTTP] POST " + url);
+
+  if (!beginHttp(http, url)) {
+    Serial.println("[HTTP] Request initialization failed.");
+    return false;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Accept", "application/json");
+
+  statusCode = http.POST(payload);
+
+  if (statusCode > 0) {
+    responseBody = http.getString();
+  } else {
+    Serial.print("[HTTP] Error: ");
+    Serial.println(http.errorToString(statusCode));
+  }
+
+  http.end();
+
+  printHttpResult(statusCode, responseBody);
+
+  return statusCode >= 200 && statusCode < 300;
+}
+
+// =============== GET JSON ======================
+bool getJson(
+  const String& path,
+  String& responseBody,
+  int& statusCode
+) {
+  responseBody = "";
+  statusCode = -1;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+
+  String url = apiUrl(path);
+
+  HTTPClient http;
+
+  Serial.println("[HTTP] GET " + url);
+
+  if (!beginHttp(http, url)) {
+    return false;
+  }
+
+  statusCode = http.GET();
+
+  if (statusCode > 0) {
+    responseBody = http.getString();
+  }
+
+  http.end();
+
+  printHttpResult(statusCode, responseBody);
+
+  return statusCode >= 200 && statusCode < 300;
+}
+
+// =============== UID CONVERSION ================
 String uidToString() {
   String uid = "";
 
@@ -76,80 +185,34 @@ String uidToString() {
   }
 
   uid.toUpperCase();
+
   return uid;
 }
 
-// ================ HTTP POST ====================
-bool postJson(
-  const String& path,
-  const String& payload,
-  String& responseBody,
-  int& statusCode
-) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Not connected.");
-    responseBody = "";
-    statusCode = -1;
-    return false;
-  }
-
-  HTTPClient http;
-  String url = apiUrl(path);
-
-  http.setConnectTimeout(5000);
-  http.setTimeout(8000);
-
-  Serial.println("[HTTP] POST " + url);
-
-  if (!apiBegin(http, url)) {
-    Serial.println("[HTTP] Initialization failed.");
-    responseBody = "";
-    statusCode = -1;
-    return false;
-  }
-
-  http.addHeader("Content-Type", "application/json");
-  statusCode = http.POST(payload);
-
-  if (statusCode > 0) {
-    responseBody = http.getString();
-  } else {
-    responseBody = "";
-    Serial.print("[HTTP] Request failed: ");
-    Serial.println(http.errorToString(statusCode));
-  }
-
-  http.end();
-
-  Serial.print("[HTTP] Status: ");
-  Serial.println(statusCode);
-
-  if (responseBody.length() > 0) {
-    Serial.println("[HTTP] Response:");
-    Serial.println(responseBody);
-  }
-
-  return statusCode >= 200 && statusCode < 300;
-}
-
-// ================ SCAN API =====================
+// =============== SCAN API ======================
 bool scanUidWithServer(
   const String& uid,
   JsonDocument& result
 ) {
   JsonDocument request;
+
   request["uid"] = uid;
 
   String payload;
   serializeJson(request, payload);
 
   String response;
-  int status = 0;
+  int status = -1;
 
   if (!postJson("/api/scan", payload, response, status)) {
-    if (status == 404) {
-      Serial.println("[RFID] UID not registered.");
+    if (status == 404 &&
+        response.indexOf("No route for") >= 0) {
+      Serial.println("[RFID] API route missing on Vercel.");
     }
+    else {
+      Serial.println("[RFID] Scan API request failed.");
+    }
+
     return false;
   }
 
@@ -165,7 +228,7 @@ bool scanUidWithServer(
   return true;
 }
 
-// ================ RESET SESSION ================
+// =============== RESET SESSION =================
 void resetSession() {
   activeStudentId = "";
   activeStudentName = "";
@@ -173,21 +236,26 @@ void resetSession() {
 
   Serial.println();
   Serial.println("================================");
-  Serial.println("Ready: scan STUDENT card first.");
+  Serial.println("READY: SCAN STUDENT CARD FIRST");
   Serial.println("================================");
 }
 
-// ================ STUDENT SCAN =================
+// =============== STUDENT VERIFICATION ==========
 void handleStudent(JsonDocument& data) {
   JsonObject student = data["student"];
 
   if (student.isNull() || student["id"].isNull()) {
-    Serial.println("[ERROR] Student ID missing in API response.");
+    Serial.println("[ERROR] Student details missing.");
+
+    serializeJsonPretty(data, Serial);
+    Serial.println();
+
     return;
   }
 
   activeStudentId = student["id"].as<String>();
   activeStudentName = student["name"] | "Unknown";
+
   waitingForBook = true;
 
   Serial.println();
@@ -202,17 +270,22 @@ void handleStudent(JsonDocument& data) {
   Serial.println("Now scan the BOOK tag.");
 }
 
-// ================ BOOK BORROW ==================
+// =============== BOOK BORROW ===================
 void handleBook(JsonDocument& data) {
   JsonObject book = data["book"];
 
   if (book.isNull() || book["id"].isNull()) {
-    Serial.println("[ERROR] Book ID missing in API response.");
+    Serial.println("[ERROR] Book details missing.");
+
+    serializeJsonPretty(data, Serial);
+    Serial.println();
+
     return;
   }
 
   String bookId = book["id"].as<String>();
   String bookTitle = book["title"] | "Unknown title";
+
   bool available = data["available"] | false;
 
   Serial.println();
@@ -225,12 +298,14 @@ void handleBook(JsonDocument& data) {
   Serial.println(bookTitle);
 
   if (!available) {
-    Serial.println("Book unavailable or already borrowed.");
+    Serial.println("[BOOK] Book is unavailable or already borrowed.");
+
     resetSession();
     return;
   }
 
   JsonDocument request;
+
   request["studentId"] = activeStudentId;
   request["bookId"] = bookId;
 
@@ -238,24 +313,24 @@ void handleBook(JsonDocument& data) {
   serializeJson(request, payload);
 
   String response;
-  int status = 0;
+  int status = -1;
 
-  bool success = postJson(
-    "/api/borrow",
-    payload,
-    response,
-    status
-  );
-
-  if (!success) {
-    Serial.println("[ERROR] Borrowing request failed.");
-    Serial.println("Check the deployed URL, the /api/health endpoint and Appwrite.");
+  if (!postJson("/api/borrow", payload, response, status)) {
+    Serial.println("[ERROR] Borrow request failed.");
+    Serial.println("Fix the API and retry.");
     return;
   }
 
   JsonDocument result;
+
   DeserializationError error =
     deserializeJson(result, response);
+
+  if (error) {
+    Serial.println("[JSON] Borrow response could not be parsed.");
+    resetSession();
+    return;
+  }
 
   Serial.println();
   Serial.println("======= BOOK ISSUE SUCCESS =======");
@@ -272,56 +347,54 @@ void handleBook(JsonDocument& data) {
   Serial.print("Book ID: ");
   Serial.println(bookId);
 
-  if (!error) {
-    Serial.print("Issue Date: ");
-    Serial.println(result["issueDate"] | "");
+  Serial.print("Issue Date: ");
+  Serial.println(result["issueDate"] | "");
 
-    Serial.print("Due Date: ");
-    Serial.println(result["dueDate"] | "");
+  Serial.print("Due Date: ");
+  Serial.println(result["dueDate"] | "");
 
-    Serial.print("Status: ");
-    Serial.println(result["status"] | "BORROWED");
-  }
+  Serial.print("Status: ");
+  Serial.println(result["status"] | "BORROWED");
 
-  Serial.println("Borrowing entry saved by the backend.");
-  Serial.println("Refresh the website to see the record.");
+  Serial.println("Borrowing record saved by backend.");
+  Serial.println("Refresh your website to see the record.");
 
   resetSession();
 }
 
-// ================ HANDLE RFID ==================
+// =============== CARD HANDLER ===================
 void handleCard(const String& uid) {
   Serial.println();
   Serial.println("--------------------------------");
+
   Serial.print("Scanned UID: ");
   Serial.println(uid);
+
   Serial.println("Checking UID with backend...");
 
   JsonDocument data;
 
   if (!scanUidWithServer(uid, data)) {
-    Serial.println(
-      "Scan failed. Check Wi-Fi, server and UID registration."
-    );
+    Serial.println("[SCAN FAILED] Check API and UID registration.");
     return;
   }
 
   String type = data["type"] | "";
 
   if (type == "STUDENT") {
-    if (waitingForBook) {
-      String scannedStudentId =
-        data["student"]["id"].as<String>();
+    String scannedStudentId =
+      data["student"]["id"].as<String>();
 
-      if (scannedStudentId == activeStudentId) {
-        Serial.println(
-          "Student already verified. Scan the book."
-        );
-      } else {
-        Serial.println("Switching to the newly scanned student.");
-        handleStudent(data);
+    if (waitingForBook &&
+        scannedStudentId == activeStudentId) {
+      Serial.println("[RFID] Student already verified.");
+      Serial.println("Scan the book tag.");
+    }
+    else {
+      if (waitingForBook) {
+        Serial.println("[RFID] Switching student.");
       }
-    } else {
+
       handleStudent(data);
     }
 
@@ -329,8 +402,8 @@ void handleCard(const String& uid) {
   }
 
   if (type == "BOOK") {
-    if (!waitingForBook || activeStudentId.length() == 0) {
-      Serial.println("Scan a student card before scanning a book.");
+    if (!waitingForBook || activeStudentId.isEmpty()) {
+      Serial.println("[RFID] Scan student card first.");
       return;
     }
 
@@ -338,21 +411,25 @@ void handleCard(const String& uid) {
     return;
   }
 
-  Serial.println("Unexpected response from the server.");
-  serializeJson(data, Serial);
+  Serial.println("[API] Unexpected response:");
+
+  serializeJsonPretty(data, Serial);
   Serial.println();
 }
 
-// ================ WIFI CONNECT =================
-void connectWiFi() {
+// =============== WIFI CONNECTION ================
+bool connectWiFi() {
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  Serial.print("Connecting to Wi-Fi");
+  Serial.print("[WiFi] Connecting");
 
   uint8_t attempts = 0;
 
-  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+  while (WiFi.status() != WL_CONNECTED &&
+         attempts < 40) {
     delay(500);
     Serial.print(".");
     attempts++;
@@ -361,8 +438,10 @@ void connectWiFi() {
   Serial.println();
 
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Connection failed. Check credentials.");
-    return;
+    Serial.println("[WiFi] Connection failed.");
+    Serial.println("Check Wi-Fi name and password.");
+
+    return false;
   }
 
   Serial.println("[WiFi] Connected.");
@@ -370,39 +449,33 @@ void connectWiFi() {
   Serial.print("[WiFi] ESP32 IP: ");
   Serial.println(WiFi.localIP());
 
-  Serial.print("[API] Server URL: ");
-  Serial.println(API_BASE_URL);
+  Serial.print("[API] Base URL: ");
+  Serial.println(apiBase());
 
-  HTTPClient http;
-  String url = apiUrl("/api/health");
+  String healthResponse;
+  int healthStatus = -1;
 
-  http.setConnectTimeout(5000);
-  http.setTimeout(8000);
+  bool healthOk =
+    getJson("/api/health", healthResponse, healthStatus);
 
-  if (apiBegin(http, url)) {
-    int status = http.GET();
-
-    Serial.print("[API] Health status: ");
-    Serial.println(status);
-
-    if (status > 0) {
-      Serial.println(http.getString());
-    } else {
-      Serial.println("Cannot reach backend. Check the deployed URL.");
-    }
-
-    http.end();
+  if (healthOk) {
+    Serial.println("[API] Health endpoint reachable.");
   }
+  else {
+    Serial.println("[API] Health check failed.");
+  }
+
+  return true;
 }
 
-// ================ SETUP ========================
+// =============== SETUP ===========================
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
   Serial.println();
   Serial.println("==========================================");
-  Serial.println("     RFID LIBRARY MANAGEMENT SYSTEM");
+  Serial.println("      RFID LIBRARY MANAGEMENT SYSTEM");
   Serial.println("==========================================");
 
   SPI.begin(
@@ -415,8 +488,8 @@ void setup() {
   rfid.PCD_Init();
   delay(100);
 
-  // Vercel uses a valid TLS certificate, but we skip pinning so the
-  // sketch works across Appwrite/Vercel certificate rotations.
+  // Temporary HTTPS testing configuration.
+  // Production firmware should validate the server certificate.
   tlsClient.setInsecure();
 
   byte version = rfid.PCD_ReadRegister(rfid.VersionReg);
@@ -425,24 +498,27 @@ void setup() {
   Serial.println(version, HEX);
 
   if (version == 0x00 || version == 0xFF) {
-    Serial.println("[RFID] WARNING: Check reader wiring.");
-  } else {
+    Serial.println("[RFID] WARNING: RC522 communication failed.");
+    Serial.println("Check wiring and 3.3V power.");
+  }
+  else {
     Serial.println("[RFID] RC522 initialized.");
     rfid.PCD_AntennaOn();
   }
 
   connectWiFi();
+
   resetSession();
 }
 
-// ================ MAIN LOOP ====================
+// =============== MAIN LOOP =======================
 void loop() {
-  // Reconnect Wi-Fi without requiring an ESP32 reset
   if (WiFi.status() != WL_CONNECTED) {
     static unsigned long lastReconnect = 0;
 
     if (millis() - lastReconnect > 10000) {
       lastReconnect = millis();
+
       Serial.println("[WiFi] Reconnecting...");
       WiFi.reconnect();
     }
@@ -451,7 +527,6 @@ void loop() {
     return;
   }
 
-  // Keep polling the reader continuously
   if (!rfid.PICC_IsNewCardPresent()) {
     delay(30);
     return;
@@ -464,13 +539,13 @@ void loop() {
 
   String uid = uidToString();
 
-  // Ignore rapid duplicate reads of the same card
   unsigned long now = millis();
 
   if (uid == lastProcessedUID &&
-      now - lastProcessedTime < SCAN_COOLDOWN) {
+      now - lastProcessedTime < SCAN_COOLDOWN_MS) {
     rfid.PICC_HaltA();
     rfid.PCD_StopCrypto1();
+
     delay(50);
     return;
   }
@@ -479,12 +554,11 @@ void loop() {
   lastProcessedTime = now;
 
   Serial.println("[RFID] Card detected!");
+
   handleCard(uid);
 
-  // End communication with the current card
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 
-  // Do not reset or reinitialize the ESP32 here
   delay(100);
 }

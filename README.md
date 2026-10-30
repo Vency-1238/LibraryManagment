@@ -9,7 +9,10 @@ rfid-project/
 │  └─ RFID_Library/RFID_Library.ino   # ESP32 + RC522 sketch
 ├─ website/                           # the whole web app (Vercel root)
 │  ├─ src/                            # React dashboard
-│  ├─ api/[...slug].js                # single Vercel Function (catch-all /api/*)
+│  ├─ api/                            # one Vercel Function per endpoint
+│  │  ├─ health.js  scan.js  borrow.js  return.js
+│  │  ├─ students.js  books.js  borrowings.js
+│  │  └─ students/[id].js  books/[id].js  borrowings/[id].js
 │  ├─ api-lib/                        # Appwrite access layer + route handlers
 │  ├─ scripts/seed.js                 # one-time demo data seeder
 │  ├─ vercel.json
@@ -90,7 +93,12 @@ device API to work without a key.
 | POST | `/api/return` | `{ bookId }` |
 | GET | `/api/students`, `/api/books`, `/api/borrowings` | listings |
 | POST | `/api/students`, `/api/books` | create |
-| DELETE | `/api/students/:id`, `/api/books/:id`, `/api/borrowings/:id` | delete |
+| DELETE | `/api/students/:id`, `/api/books/:id`, `/api/borrowings/:id` | delete (`?id=` also works) |
+
+Each path is its own function file under `website/api`. Don't add a catch-all
+(`api/[...slug].js`): Vercel invokes it for `/api/*` but passes `req.url === "/"`
+with no `slug` param, so every route ends up answering
+`{"error":"No route for …"}`.
 
 ## Firmware
 

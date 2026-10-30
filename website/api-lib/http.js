@@ -27,6 +27,30 @@ export function sendDatabaseError(res, error) {
   });
 }
 
+/*
+ * Reads a path parameter for a `[param]` route. Vercel fills req.query from the
+ * dynamic segment, but the raw pathname is used as a fallback (and `?id=` also
+ * works) so the route keeps working if the platform stops injecting it.
+ */
+export function routeParam(req, name) {
+  const fromQuery = req.query?.[name];
+  const value = Array.isArray(fromQuery) ? fromQuery[0] : fromQuery;
+  if (value) return String(value);
+
+  const pathname = String(req.url || "")
+    .split("?")[0]
+    .split("#")[0]
+    .replace(/^https?:\/\/[^/]+/i, "");
+  const segments = pathname.split("/").filter(Boolean);
+  if (!segments.length) return "";
+
+  try {
+    return decodeURIComponent(segments[segments.length - 1]);
+  } catch {
+    return segments[segments.length - 1];
+  }
+}
+
 export function readJsonBody(req) {
   if (req.body && typeof req.body === "object") return req.body;
   if (typeof req.body === "string") {
