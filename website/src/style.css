@@ -490,6 +490,87 @@ tbody tr.borrow-row { cursor: pointer; }
 }
 .muted { color: var(--muted); }
 
+/* grouped borrowing history */
+.th-expand { width: 36px; padding-left: 14px; padding-right: 0; }
+.expand-cell { width: 36px; padding-left: 14px; padding-right: 0; }
+.chev { display: inline-flex; color: var(--muted); transition: transform 160ms ease; }
+.chev-open { transform: rotate(90deg); }
+.group-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.group-books-cell { white-space: normal; }
+.group-books {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 300px;
+  max-width: 460px;
+}
+.group-book {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  white-space: normal;
+}
+.group-book-overdue {
+  border-color: color-mix(in srgb, var(--red) 30%, var(--border));
+  background: color-mix(in srgb, var(--red-s) 45%, var(--surface));
+}
+.group-book-top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.group-book-title { font-size: 12.5px; font-weight: 700; }
+.group-book-dates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 4px;
+  padding-left: 24px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.group-total { display: flex; flex-direction: column; gap: 1px; }
+.group-total strong { font-size: 18px; line-height: 1.1; }
+.group-total span { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.status-stack { display: flex; flex-wrap: wrap; gap: 4px; max-width: 190px; white-space: normal; }
+.group-detail-row > td { padding: 0; background: var(--surface2); }
+.group-detail { padding: 14px 18px 18px; white-space: normal; }
+.group-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.group-detail-head h4 { font-size: 13.5px; font-weight: 800; }
+.group-detail-head p { margin-top: 3px; color: var(--muted); font-size: 11.5px; }
+.group-record-list { display: flex; flex-direction: column; gap: 8px; }
+.group-record {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(92px, 1fr)) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.group-record-over {
+  border-color: color-mix(in srgb, var(--red) 30%, var(--border));
+  background: color-mix(in srgb, var(--red-s) 40%, var(--surface));
+}
+.group-record-main { min-width: 0; }
+.group-record-main .cell-main { display: flex; align-items: center; gap: 7px; overflow-wrap: anywhere; }
+.group-record-ids { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.group-record-date { display: flex; flex-direction: column; gap: 2px; }
+.group-record-date span {
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+}
+.group-record-date strong { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.group-record-status { display: flex; justify-content: center; }
+.group-record-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+
 /* student borrowing capacity */
 .borrow-cell {
   display: flex;
@@ -914,6 +995,8 @@ tbody tr.borrow-row { cursor: pointer; }
 @media (max-width: 1024px) {
   .main { padding: 26px 22px 18px; }
   .hdr { padding: 0 20px; }
+  .group-record { grid-template-columns: minmax(180px, 1.6fr) repeat(3, minmax(80px, 1fr)) auto; }
+  .group-record-actions { grid-column: 1 / -1; justify-content: flex-end; }
 }
 
 /* ── Small tablet ────────────────────────────────── */
@@ -1051,6 +1134,25 @@ tbody tr.borrow-row { cursor: pointer; }
   .av-cell { justify-content: flex-end; }
   .borrow-cell { align-items: flex-end; text-align: right; }
   .badge { white-space: nowrap; }
+
+  /* grouped borrowing history */
+  .th-expand { display: none; }
+  td.expand-cell { display: none; }
+  td.group-books-cell { align-items: flex-start; flex-wrap: wrap; }
+  td.group-books-cell::before { flex-basis: 100%; padding-top: 0; }
+  .group-books { align-items: stretch; flex: 1 1 100%; width: 100%; min-width: 0; max-width: none; }
+  .group-book { width: 100%; text-align: left; }
+  .group-book-dates { justify-content: flex-start; padding-left: 0; text-align: left; }
+  .group-total { align-items: flex-end; }
+  .status-stack { justify-content: flex-end; max-width: none; }
+  .group-detail-row { padding: 0 !important; }
+  .group-detail-row > td { display: block; padding: 0 !important; }
+  .group-detail { width: 100%; padding: 12px 14px 16px; }
+  .group-detail-head { flex-direction: column; align-items: flex-start; }
+  .group-record { grid-template-columns: 1fr; gap: 8px; padding: 12px; }
+  .group-record-date { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .group-record-status { justify-content: flex-end; }
+  .group-record-actions { justify-content: flex-end; }
 
   /* modal → bottom sheet */
   .modal-bg { padding: 10px; align-items: end; }

@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { db, MAX_ACTIVE_BOOKS } from "./lib/database.js";
 import { client, DB_ID, S_COL, B_COL, BOR_COL, SCAN_COL } from "./lib/appwrite.js";
+import { isOverdue, groupBorrowingsByStudent } from "./lib/borrowings.js";
 import { returnBook as returnBookViaApi, deleteBorrowing as deleteBorrowingViaApi } from "./lib/api.js";
 
 /* ══════════════════════════════════════════════════════════
@@ -18,9 +19,6 @@ function formatDateTime(iso) {
     day: "2-digit", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });
-}
-function isOverdue(dueDate, status) {
-  return status === "BORROWED" && Boolean(dueDate) && new Date(dueDate) < new Date();
 }
 function normalizeUid(raw) {
   const hex = String(raw ?? "").toUpperCase().replace(/[^0-9A-F]/g, "");
@@ -76,6 +74,7 @@ const Ic = {
   chart:   () => <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="3" y1="20" x2="21" y2="20"/></svg>,
   locate:  () => <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>,
   edit:    () => <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.9" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>,
+  chev:    () => <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>,
 };
 
 /* ══════════════════════════════════════════════════════════
@@ -834,6 +833,7 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
   const [detail, setDetail]  = useState(null);
   const [delTarget, setDel]  = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [expanded, setExpanded] = useState(() => new Set());
 
   const sMap = new Map(students.map((s) => [s.studentId, s.name]));
   const bMap = new Map(books.map((b) => [b.bookId, b]));
@@ -844,8 +844,12 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
     RETURNED: borrowings.filter((r) => r.status === "RETURNED").length,
     OVERDUE:  borrowings.filter((r) => isOverdue(r.dueDate, r.status)).length,
   };
+  const studentCount = new Set(borrowings.map((r) => r.studentId)).size;
 
-  const list = borrowings
+  /* Filters and search stay record-based, exactly as before. Grouping happens
+     afterwards so a student row only appears when one of their records matches
+     the active tab/search. No database record is changed. */
+  const filteredRecords = borrowings
     .filter((r) => {
       if (filt === "BORROWED") return r.status === "BORROWED";
       if (filt === "RETURNED") return r.status === "RETURNED";
@@ -856,12 +860,23 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
       if (!q) return true;
       const s = q.toLowerCase();
       return (sMap.get(r.studentId) || "").toLowerCase().includes(s)
-          || r.studentId.toLowerCase().includes(s)
+          || String(r.studentId || "").toLowerCase().includes(s)
           || (bMap.get(r.bookId)?.title || "").toLowerCase().includes(s)
-          || r.bookId.toLowerCase().includes(s)
-          || (r.borrowBatchId || "").toLowerCase().includes(s)
-          || r.$id.toLowerCase().includes(s);
+          || String(r.bookId || "").toLowerCase().includes(s)
+          || String(r.borrowBatchId || "").toLowerCase().includes(s)
+          || String(r.$id || "").toLowerCase().includes(s);
     });
+
+  const groups = groupBorrowingsByStudent(filteredRecords, students, books);
+
+  function toggleGroup(studentId) {
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      if (next.has(studentId)) next.delete(studentId);
+      else next.add(studentId);
+      return next;
+    });
+  }
 
   async function handleReturn(r) {
     setRet(r.$id);
@@ -926,9 +941,11 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
       <div className="pg-head">
         <div>
           <h2>Borrowing History</h2>
-          <p>Returning a book updates the record. Completed entries can be deleted when no longer needed.</p>
+          <p>Each student appears once. Expand a row to see every book, its dates and status, and to return a single record.</p>
         </div>
-        <span className="cnt-chip">{borrowings.length} total record{borrowings.length === 1 ? "" : "s"}</span>
+        <span className="cnt-chip">
+          {studentCount} student{studentCount === 1 ? "" : "s"} · {borrowings.length} record{borrowings.length === 1 ? "" : "s"}
+        </span>
       </div>
 
       <div className="panel">
@@ -946,72 +963,190 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
           <Searchbar value={q} onChange={setQ} placeholder="Search by student, book, batch or borrow ID…" />
         </div>
 
-        {list.length === 0 ? (
+        {groups.length === 0 ? (
           <EmptyState icon="📋" msg={q ? `No records matching "${q}"` : "No records in this category."} />
         ) : (
           <div className="tbl-wrap">
-            <table>
+            <table className="borrowings-table">
               <thead>
                 <tr>
-                  <th>Borrow ID</th>
+                  <th className="th-expand" aria-label="Expand"></th>
                   <th>Student ID</th>
                   <th>Student Name</th>
-                  <th>Book ID</th>
-                  <th>Book Title</th>
-                  <th>Batch ID</th>
-                  <th>Issue Date</th>
-                  <th>Due Date</th>
-                  <th>Return Date</th>
+                  <th>Borrowed Books</th>
+                  <th>Total Books</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {list.map((r) => {
-                  const over = isOverdue(r.dueDate, r.status);
-                  const bookDoc = bMap.get(r.bookId);
+                {groups.map((group) => {
+                  const isOpen = expanded.has(group.studentId);
                   return (
-                    <tr
-                      key={r.$id}
-                      className={`borrow-row ${over ? "tr-over" : ""}`}
-                      onClick={() => setDetail(r)}
-                    >
-                      <td data-label="Borrow ID">
-                        <code className="id-chip mono-sm" title={r.$id}>{r.$id}</code>
-                      </td>
-                      <td data-label="Student ID"><code className="id-chip">{r.studentId}</code></td>
-                      <td data-label="Student Name">
-                        <div className="cell-main">{sMap.get(r.studentId) || "—"}</div>
-                      </td>
-                      <td data-label="Book ID"><code className="id-chip">{r.bookId}</code></td>
-                      <td data-label="Book Title">
-                        <div className="bk-cell"><span className="bk-ico">📖</span>{bookDoc?.title || r.bookId}</div>
-                      </td>
-                      <td data-label="Batch ID">
-                        {r.borrowBatchId
-                          ? <code className="batch-chip" title={r.borrowBatchId}>{r.borrowBatchId}</code>
-                          : <span className="muted">—</span>}
-                      </td>
-                      <td data-label="Issue Date">{formatDate(r.issueDate)}</td>
-                      <td data-label="Due Date" className={over ? "td-danger" : ""}>{formatDate(r.dueDate)}</td>
-                      <td data-label="Return Date">{r.returnDate ? formatDate(r.returnDate) : "—"}</td>
-                      <td data-label="Status"><Badge status={r.status} overdue={over} /></td>
-                      <td data-label="Actions" className="act-cell">
-                        {r.status === "BORROWED" ? (
-                          <button className="btn btn-ret btn-sm" onClick={(e) => { e.stopPropagation(); handleReturn(r); }} disabled={returning === r.$id}>
-                            <Ic.ret /> {returning === r.$id ? "…" : "Return"}
-                          </button>
-                        ) : (
+                    <Fragment key={group.studentId}>
+                      <tr
+                        className={`borrow-row group-row ${group.counts.overdue > 0 ? "tr-over" : ""}`}
+                        onClick={() => toggleGroup(group.studentId)}
+                        onKeyDown={(e) => {
+                          if (e.target !== e.currentTarget) return;
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            toggleGroup(group.studentId);
+                          }
+                        }}
+                        tabIndex={0}
+                        aria-expanded={isOpen}
+                      >
+                        <td className="expand-cell" aria-hidden="true">
+                          <span className={`chev ${isOpen ? "chev-open" : ""}`}><Ic.chev /></span>
+                        </td>
+                        <td data-label="Student ID"><code className="id-chip">{group.studentId}</code></td>
+                        <td data-label="Student Name">
+                          <div className="cell-main">{group.studentName}</div>
+                          <div className="cell-sub">
+                            {group.counts.books} unique title{group.counts.books === 1 ? "" : "s"}
+                          </div>
+                        </td>
+                        <td data-label="Borrowed Books" className="group-books-cell">
+                          <div className="group-books">
+                            {group.bookGroups.map((book) => {
+                              const focus = book.focusRecord;
+                              const focusOverdue = isOverdue(focus.dueDate, focus.status);
+                              return (
+                                <div
+                                  className={`group-book ${book.overdue ? "group-book-overdue" : ""}`}
+                                  key={book.bookId}
+                                >
+                                  <div className="group-book-top">
+                                    <span className="bk-ico">📖</span>
+                                    <span className="group-book-title">{book.title}</span>
+                                    {book.cycleCount > 1 && (
+                                      <span className="meta-chip">{book.cycleCount} loans</span>
+                                    )}
+                                    <Badge status={book.status} overdue={book.overdue} />
+                                  </div>
+                                  <div className="group-book-dates">
+                                    <span>Issued {formatDate(focus.issueDate)}</span>
+                                    <span className={focusOverdue ? "td-danger" : ""}>
+                                      Due {formatDate(focus.dueDate)}
+                                    </span>
+                                    <span>
+                                      {focus.returnDate ? `Returned ${formatDate(focus.returnDate)}` : "Not returned"}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </td>
+                        <td data-label="Total Books">
+                          <div className="group-total">
+                            <strong>{group.counts.total}</strong>
+                            <span>
+                              {group.counts.books} unique book{group.counts.books === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                        </td>
+                        <td data-label="Status">
+                          <div className="status-stack">
+                            {group.counts.borrowed > 0 && (
+                              <span className="badge badge-warn">{group.counts.borrowed} BORROWED</span>
+                            )}
+                            {group.counts.overdue > 0 && (
+                              <span className="badge badge-overdue">{group.counts.overdue} OVERDUE</span>
+                            )}
+                            {group.counts.returned > 0 && (
+                              <span className="badge badge-ok">{group.counts.returned} RETURNED</span>
+                            )}
+                          </div>
+                        </td>
+                        <td data-label="Actions" className="act-cell">
                           <button
-                            className="btn btn-del btn-sm"
-                            onClick={(e) => { e.stopPropagation(); setDel(r); }}
-                            disabled={deleting && delTarget?.$id === r.$id}
+                            className="btn btn-ghost btn-sm"
+                            onClick={(e) => { e.stopPropagation(); toggleGroup(group.studentId); }}
+                            aria-expanded={isOpen}
                           >
-                            <Ic.trash /> Delete
+                            <Ic.chev /> {isOpen ? "Hide" : "View"} books
                           </button>
-                        )}
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                      {isOpen && (
+                        <tr className="group-detail-row">
+                          <td colSpan={7}>
+                            <div className="group-detail">
+                              <div className="group-detail-head">
+                                <div>
+                                  <h4>{group.studentName} · individual books</h4>
+                                  <p>
+                                    {group.counts.total} borrowing record{group.counts.total === 1 ? "" : "s"}.
+                                    Returning one book only updates that record.
+                                  </p>
+                                </div>
+                                <span className="cnt-chip">{group.studentId}</span>
+                              </div>
+                              <div className="group-record-list">
+                                {group.records.map((record) => {
+                                  const over = isOverdue(record.dueDate, record.status);
+                                  const title = bMap.get(record.bookId)?.title || record.bookId;
+                                  return (
+                                    <div className={`group-record ${over ? "group-record-over" : ""}`} key={record.$id}>
+                                      <div className="group-record-main">
+                                        <div className="cell-main"><span className="bk-ico">📖</span>{title}</div>
+                                        <div className="group-record-ids">
+                                          <code className="id-chip">{record.bookId}</code>
+                                          <code className="id-chip mono-sm" title={record.$id}>{record.$id}</code>
+                                          {record.borrowBatchId && (
+                                            <code className="batch-chip" title={record.borrowBatchId}>{record.borrowBatchId}</code>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <div className="group-record-date">
+                                        <span>Issued</span><strong>{formatDate(record.issueDate)}</strong>
+                                      </div>
+                                      <div className={`group-record-date ${over ? "td-danger" : ""}`}>
+                                        <span>Due</span><strong>{formatDate(record.dueDate)}</strong>
+                                      </div>
+                                      <div className="group-record-date">
+                                        <span>Returned</span>
+                                        <strong>{record.returnDate ? formatDate(record.returnDate) : "—"}</strong>
+                                      </div>
+                                      <div className="group-record-status">
+                                        <Badge status={record.status} overdue={over} />
+                                      </div>
+                                      <div className="group-record-actions">
+                                        <button
+                                          className="btn btn-ghost btn-sm"
+                                          onClick={(e) => { e.stopPropagation(); setDetail(record); }}
+                                        >
+                                          Details
+                                        </button>
+                                        {record.status === "BORROWED" ? (
+                                          <button
+                                            className="btn btn-ret btn-sm"
+                                            onClick={(e) => { e.stopPropagation(); handleReturn(record); }}
+                                            disabled={returning === record.$id}
+                                          >
+                                            <Ic.ret /> {returning === record.$id ? "…" : "Return"}
+                                          </button>
+                                        ) : (
+                                          <button
+                                            className="btn btn-del btn-sm"
+                                            onClick={(e) => { e.stopPropagation(); setDel(record); }}
+                                            disabled={deleting && delTarget?.$id === record.$id}
+                                          >
+                                            <Ic.trash /> Delete
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>
