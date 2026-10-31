@@ -831,6 +831,7 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
   const [filt, setFilt]      = useState("ALL");
   const [q, setQ]            = useState("");
   const [returning, setRet]  = useState(null);
+  const [detail, setDetail]  = useState(null);
   const [delTarget, setDel]  = useState(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -970,7 +971,11 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
                   const over = isOverdue(r.dueDate, r.status);
                   const bookDoc = bMap.get(r.bookId);
                   return (
-                    <tr key={r.$id} className={over ? "tr-over" : ""}>
+                    <tr
+                      key={r.$id}
+                      className={`borrow-row ${over ? "tr-over" : ""}`}
+                      onClick={() => setDetail(r)}
+                    >
                       <td data-label="Borrow ID">
                         <code className="id-chip mono-sm" title={r.$id}>{r.$id}</code>
                       </td>
@@ -993,13 +998,13 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
                       <td data-label="Status"><Badge status={r.status} overdue={over} /></td>
                       <td data-label="Actions" className="act-cell">
                         {r.status === "BORROWED" ? (
-                          <button className="btn btn-ret btn-sm" onClick={() => handleReturn(r)} disabled={returning === r.$id}>
+                          <button className="btn btn-ret btn-sm" onClick={(e) => { e.stopPropagation(); handleReturn(r); }} disabled={returning === r.$id}>
                             <Ic.ret /> {returning === r.$id ? "…" : "Return"}
                           </button>
                         ) : (
                           <button
                             className="btn btn-del btn-sm"
-                            onClick={() => setDel(r)}
+                            onClick={(e) => { e.stopPropagation(); setDel(r); }}
                             disabled={deleting && delTarget?.$id === r.$id}
                           >
                             <Ic.trash /> Delete
@@ -1014,6 +1019,35 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
           </div>
         )}
       </div>
+      <Modal
+        open={!!detail}
+        onClose={() => setDetail(null)}
+        title="Borrowing Entry Details"
+        footer={
+          <div className="mf-acts">
+            <button className="btn btn-ghost" onClick={() => setDetail(null)}>Close</button>
+          </div>
+        }
+      >
+        {detail && (
+          <div className="borrow-detail">
+            <div className="borrow-detail-status">
+              <Badge status={detail.status} overdue={isOverdue(detail.dueDate, detail.status)} />
+            </div>
+            <div className="detail-grid">
+              <div><span>Borrow ID</span><code>{detail.$id}</code></div>
+              <div><span>Batch ID</span><code>{detail.borrowBatchId || "—"}</code></div>
+              <div><span>Student name</span><strong>{sMap.get(detail.studentId) || "—"}</strong></div>
+              <div><span>Student ID</span><code>{detail.studentId}</code></div>
+              <div><span>Book title</span><strong>{bMap.get(detail.bookId)?.title || detail.bookId}</strong></div>
+              <div><span>Book ID</span><code>{detail.bookId}</code></div>
+              <div><span>Issue date</span><strong>{formatDateTime(detail.issueDate)}</strong></div>
+              <div><span>Due date</span><strong>{formatDateTime(detail.dueDate)}</strong></div>
+              <div><span>Return date</span><strong>{formatDateTime(detail.returnDate)}</strong></div>
+            </div>
+          </div>
+        )}
+      </Modal>
       <ConfirmDialog
         open={!!delTarget}
         title="Delete Borrowing Entry"
