@@ -36,7 +36,8 @@ dashboard and the hardware API.
 - Dashboard with seven real statistics: students, books, available books,
   active loans, returned books, overdue books and total RFID scans.
 - Students page with ACTIVE/INACTIVE status, active-book count and remaining
-  capacity (`2 / 4 books borrowed`).
+  capacity (`2 / 4 books borrowed`), plus editing for name, RFID UID and status
+  (`studentId` stays immutable so Borrow history remains linked).
 - Books page with category, shelf location, rack number, ISBN, loan period,
   availability, search and category/availability filters, plus edit support.
 - Permanent borrowing history with borrow batch IDs and

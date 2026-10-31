@@ -324,6 +324,7 @@ function StudentsPage({ students, borrowings, onRefresh, toast }) {
   const [q, setQ]       = useState("");
   const [modal, setModal] = useState(false);
   const [form, setForm]  = useState({ id: "", name: "", uid: ["", "", "", ""], status: "ACTIVE" });
+  const [editing, setEditing] = useState(null);
   const [saving, setSav] = useState(false);
   const [delTarget, setDel] = useState(null);
   const [deleting, setDeling] = useState(false);
@@ -339,25 +340,63 @@ function StudentsPage({ students, borrowings, onRefresh, toast }) {
     [s.name, s.studentId, s.rfidUID].some((v) => v.toLowerCase().includes(q.toLowerCase()))
   );
 
-  function resetForm() { setForm({ id: "", name: "", uid: ["", "", "", ""], status: "ACTIVE" }); }
+  function resetForm() {
+    setForm({ id: "", name: "", uid: ["", "", "", ""], status: "ACTIVE" });
+    setEditing(null);
+  }
 
-  async function handleAdd(e) {
+  function openAdd() {
+    resetForm();
+    setModal(true);
+  }
+
+  function openEdit(student) {
+    setEditing(student.$id);
+    setForm({
+      id: student.studentId,
+      name: student.name,
+      uid: uidGroups(student.rfidUID),
+      status: student.status || "ACTIVE",
+    });
+    setModal(true);
+  }
+
+  async function handleSave(e) {
     e.preventDefault();
     const uid = normalizeUid(form.uid.join(""));
     if (!uid) { toast("RFID UID must be 8 hex characters", "error"); return; }
     setSav(true);
     try {
-      if (await db.findStudentByStudentId(form.id.trim())) { toast("Student ID already exists", "error"); return; }
-      if (await db.findStudentByUid(uid)) { toast("RFID UID already registered", "error"); return; }
-      await db.addStudent({
-        studentId: form.id.trim(),
-        name: form.name.trim(),
-        rfidUID: uid,
-        status: form.status,
-      });
-      toast(`Student "${form.name}" added!`);
+      const uidOwner = await db.findStudentByUid(uid);
+      if (uidOwner && uidOwner.$id !== editing) {
+        toast("RFID UID already registered", "error");
+        return;
+      }
+
+      if (editing) {
+        /* studentId is intentionally immutable: Borrow records reference it,
+           so renaming it would detach the student's history. */
+        await db.updateStudent(editing, {
+          name: form.name.trim(),
+          rfidUID: uid,
+          status: form.status,
+        });
+        toast(`Student "${form.name}" updated`);
+      } else {
+        if (await db.findStudentByStudentId(form.id.trim())) {
+          toast("Student ID already exists", "error");
+          return;
+        }
+        await db.addStudent({
+          studentId: form.id.trim(),
+          name: form.name.trim(),
+          rfidUID: uid,
+          status: form.status,
+        });
+        toast(`Student "${form.name}" added!`);
+      }
       resetForm(); setModal(false); onRefresh();
-    } catch (err) { toast(err.message || "Failed to add student", "error"); }
+    } catch (err) { toast(err.message || "Failed to save student", "error"); }
     finally { setSav(false); }
   }
 
@@ -397,7 +436,7 @@ function StudentsPage({ students, borrowings, onRefresh, toast }) {
           <h2>Students</h2>
           <p>Manage student RFID card registrations.</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setModal(true)}><Ic.plus /> Add Student</button>
+        <button className="btn btn-primary" onClick={openAdd}><Ic.plus /> Add Student</button>
       </div>
 
       <div className="panel">
@@ -408,7 +447,7 @@ function StudentsPage({ students, borrowings, onRefresh, toast }) {
 
         {list.length === 0 ? (
           q ? <EmptyState icon="🔍" msg={`No students matching "${q}"`} /> :
-              <EmptyState icon="👥" msg="No students registered." action={{ label: "Add Student", fn: () => setModal(true) }} />
+              <EmptyState icon="👥" msg="No students registered." action={{ label: "Add Student", fn: openAdd }} />
         ) : (
           <div className="tbl-wrap">
             <table>
@@ -447,6 +486,9 @@ function StudentsPage({ students, borrowings, onRefresh, toast }) {
                         </div>
                       </td>
                       <td data-label="Actions" className="act-cell">
+                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(s)}>
+                          <Ic.edit /> Edit
+                        </button>
                         <button
                           className="btn btn-ghost btn-sm"
                           disabled={toggling === s.$id}
@@ -467,19 +509,25 @@ function StudentsPage({ students, borrowings, onRefresh, toast }) {
         )}
       </div>
 
-      <Modal open={modal} onClose={() => { setModal(false); resetForm(); }} title="Add New Student"
+      <Modal
+        open={modal}
+        onClose={() => { setModal(false); resetForm(); }}
+        title={editing ? "Edit Student" : "Add New Student"}
         footer={
           <div className="mf-acts">
-            <button className="btn btn-ghost" onClick={() => setModal(false)} disabled={saving}>Cancel</button>
+            <button className="btn btn-ghost" onClick={() => { setModal(false); resetForm(); }} disabled={saving}>Cancel</button>
             <button className="btn btn-primary" form="sf" type="submit" disabled={saving}>
-              {saving ? "Adding…" : "Add Student"}
+              {saving ? "Saving…" : editing ? "Save Changes" : "Add Student"}
             </button>
           </div>
         }>
-        <form id="sf" onSubmit={handleAdd} className="f-grid">
+        <form id="sf" onSubmit={handleSave} className="f-grid">
           <div className="f-fld">
-            <label>Student ID</label>
-            <input required placeholder="e.g. 23BCP230" value={form.id}
+            <label>
+              Student ID
+              {editing && <span className="f-hint">immutable to preserve history</span>}
+            </label>
+            <input required placeholder="e.g. 23BCP230" value={form.id} disabled={Boolean(editing)}
               onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))} />
           </div>
           <div className="f-fld">
