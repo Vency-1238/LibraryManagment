@@ -1,6 +1,6 @@
 import { databases, DB_ID, S_COL, B_COL, BOR_COL, SCAN_COL, ID, Query } from "./appwrite.js";
 
-export const MAX_ACTIVE_BOOKS = 4;
+export const MAX_ACTIVE_BOOKS = 3;
 
 async function listAll(colId, queries = []) {
   const docs = [];

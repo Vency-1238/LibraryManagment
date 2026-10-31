@@ -10,7 +10,7 @@ import {
 
 /* ── constants ───────────────────────────────────────────── */
 
-export const MAX_ACTIVE_BOOKS = 4;
+export const MAX_ACTIVE_BOOKS = 3;
 const MAX_BATCH_ID_LENGTH = 64;
 const RACE_RECHECK_ATTEMPTS = 3;
 const RACE_RECHECK_DELAY_MS = 120;
