@@ -11,3 +11,5 @@ export const DB_ID    = import.meta.env.VITE_APPWRITE_DATABASE_ID;
 export const S_COL    = import.meta.env.VITE_APPWRITE_STUDENTS_COLLECTION_ID;
 export const B_COL    = import.meta.env.VITE_APPWRITE_BOOKS_COLLECTION_ID;
 export const BOR_COL  = import.meta.env.VITE_APPWRITE_BORROW_COLLECTION_ID;
+/* Optional until the ScanLogs collection is created in the Appwrite Console. */
+export const SCAN_COL = import.meta.env.VITE_APPWRITE_SCANLOGS_COLLECTION_ID;

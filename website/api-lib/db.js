@@ -10,6 +10,7 @@ import { Client, Databases, ID, Query } from "node-appwrite";
  *   VITE_APPWRITE_STUDENTS_COLLECTION_ID / APPWRITE_STUDENTS_COLLECTION_ID
  *   VITE_APPWRITE_BOOKS_COLLECTION_ID / APPWRITE_BOOKS_COLLECTION_ID
  *   VITE_APPWRITE_BORROW_COLLECTION_ID / APPWRITE_BORROW_COLLECTION_ID
+ *   VITE_APPWRITE_SCANLOGS_COLLECTION_ID / APPWRITE_SCANLOGS_COLLECTION_ID (optional)
  *   APPWRITE_API_KEY (optional)
  *
  * If APPWRITE_API_KEY exists it is used first; when it lacks a scope Appwrite
@@ -53,6 +54,12 @@ function readConfig() {
   }
 
   config.apiKey = readEnv(["APPWRITE_API_KEY"]);
+  /* Optional: ScanLogs is enabled only after the collection is created in the
+     Appwrite Console and its ID is configured. */
+  config.scanLogsCollectionId = readEnv([
+    "APPWRITE_SCANLOGS_COLLECTION_ID",
+    "VITE_APPWRITE_SCANLOGS_COLLECTION_ID"
+  ]);
   return { ...config, missing };
 }
 
@@ -134,7 +141,12 @@ async function findOne(collectionId, field, value, mapper = documentData) {
   return documents[0] || null;
 }
 
-export const appwriteConfig = { configured, authMode, databaseId: config.databaseId };
+export const appwriteConfig = {
+  configured,
+  authMode,
+  databaseId: config.databaseId,
+  scanLogsConfigured: Boolean(config.scanLogsCollectionId)
+};
 
 export async function checkConnection() {
   try {
@@ -149,6 +161,11 @@ export const listStudents = () => listAll(config.studentsCollectionId);
 export const listBooks = () => listAll(config.booksCollectionId, [], bookData);
 export const listBorrowRecords = () =>
   listAll(config.borrowCollectionId, [Query.orderDesc("issueDate")]);
+
+export const listScanLogs = () =>
+  config.scanLogsCollectionId
+    ? listAll(config.scanLogsCollectionId)
+    : Promise.resolve([]);
 
 export const findStudentById = (studentId) =>
   findOne(config.studentsCollectionId, "studentId", studentId);
@@ -174,8 +191,20 @@ export const listActiveBorrowingsForStudent = (studentId) =>
     Query.equal("status", "BORROWED")
   ]);
 
+export const listBorrowingsForStudent = (studentId) =>
+  listAll(config.borrowCollectionId, [
+    Query.equal("studentId", studentId),
+    Query.orderDesc("issueDate")
+  ]);
+
 export const listBorrowingsForBook = (bookId) =>
   listAll(config.borrowCollectionId, [Query.equal("bookId", bookId)]);
+
+export const listActiveBorrowingsForBook = (bookId) =>
+  listAll(config.borrowCollectionId, [
+    Query.equal("bookId", bookId),
+    Query.equal("status", "BORROWED")
+  ]);
 
 export async function createStudent(data) {
   return documentData(await call((databases) => databases.createDocument(
@@ -210,6 +239,16 @@ export async function createBorrowRecord(data) {
   return documentData(await call((databases) => databases.createDocument(
     config.databaseId,
     config.borrowCollectionId,
+    ID.unique(),
+    data
+  )));
+}
+
+export async function createScanLog(data) {
+  if (!config.scanLogsCollectionId) return null;
+  return documentData(await call((databases) => databases.createDocument(
+    config.databaseId,
+    config.scanLogsCollectionId,
     ID.unique(),
     data
   )));

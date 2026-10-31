@@ -1,4 +1,6 @@
-import { databases, DB_ID, S_COL, B_COL, BOR_COL, ID, Query } from "./appwrite.js";
+import { databases, DB_ID, S_COL, B_COL, BOR_COL, SCAN_COL, ID, Query } from "./appwrite.js";
+
+export const MAX_ACTIVE_BOOKS = 4;
 
 async function listAll(colId, queries = []) {
   const docs = [];
@@ -54,7 +56,12 @@ export const db = {
     return (await listAll(S_COL, [Query.equal("rfidUID", rfidUID)]))[0] ?? null;
   },
   addStudent: (data) =>
-    databases.createDocument(DB_ID, S_COL, ID.unique(), data),
+    databases.createDocument(DB_ID, S_COL, ID.unique(), {
+      status: "ACTIVE",
+      ...data,
+    }),
+  updateStudent: (docId, data) =>
+    databases.updateDocument(DB_ID, S_COL, docId, data),
   deleteStudent: (docId) =>
     databases.deleteDocument(DB_ID, S_COL, docId),
 
@@ -62,6 +69,12 @@ export const db = {
     listAll(BOR_COL, [
       Query.equal("studentId", studentId),
       Query.equal("status", "BORROWED"),
+    ]),
+
+  getBorrowingsForStudent: (studentId) =>
+    listAll(BOR_COL, [
+      Query.equal("studentId", studentId),
+      Query.orderDesc("issueDate"),
     ]),
 
   /* ─── Books ─────────────────────────────────────── */
@@ -82,6 +95,12 @@ export const db = {
   getBorrowingsForBook: (bookId) =>
     listAll(BOR_COL, [Query.equal("bookId", bookId)]),
 
+  getActiveBorrowingsForBook: (bookId) =>
+    listAll(BOR_COL, [
+      Query.equal("bookId", bookId),
+      Query.equal("status", "BORROWED"),
+    ]),
+
   /* ─── Borrowings ────────────────────────────────── */
   getBorrowings: () => listAll(BOR_COL, [Query.orderDesc("issueDate")]),
 
@@ -89,6 +108,7 @@ export const db = {
     databases.createDocument(DB_ID, BOR_COL, ID.unique(), data),
   updateBorrowing: (docId, data) =>
     databases.updateDocument(DB_ID, BOR_COL, docId, data),
-  deleteBorrowing: (docId) =>
-    databases.deleteDocument(DB_ID, BOR_COL, docId),
+
+  /* ─── ScanLogs (optional collection) ────────────── */
+  getScanLogs: () => SCAN_COL ? listAll(SCAN_COL) : Promise.resolve([]),
 };

@@ -87,11 +87,22 @@ async function findOne(col, field, value) {
 }
 
 async function upsertStudent(studentId, name, rfidUID) {
-  if (await findOne(S_COL, "studentId", studentId)) {
-    console.log(`  = Student already exists: ${studentId} — ${name}`);
+  const existing = await findOne(S_COL, "studentId", studentId);
+  if (existing) {
+    if (!existing.status) {
+      await call((db) => db.updateDocument(DB, S_COL, existing.$id, { status: "ACTIVE" }));
+      console.log(`  ~ Added missing status to student: ${studentId} — ${name}`);
+    } else {
+      console.log(`  = Student already exists: ${studentId} — ${name}`);
+    }
     return;
   }
-  await call((db) => db.createDocument(DB, S_COL, ID.unique(), { studentId, name, rfidUID }));
+  await call((db) => db.createDocument(DB, S_COL, ID.unique(), {
+    studentId,
+    name,
+    rfidUID,
+    status: "ACTIVE",
+  }));
   console.log(`  + Created student: ${studentId} — ${name}`);
 }
 

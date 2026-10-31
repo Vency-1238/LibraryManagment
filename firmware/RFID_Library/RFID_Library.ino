@@ -29,11 +29,24 @@ WiFiClient plainClient;
 // =============== SESSION DATA =================
 String activeStudentId = "";
 String activeStudentName = "";
+String activeBorrowBatchId = "";
 bool waitingForBook = false;
 
 String lastProcessedUID = "";
 unsigned long lastProcessedTime = 0;
 const unsigned long SCAN_COOLDOWN_MS = 1500;
+
+// =============== BORROW / RETURN MODE =========
+// The BOOT button (GPIO 0) toggles between issuing and returning books.
+// You can also send "b" or "r" over the Serial Monitor.
+enum LibraryMode { MODE_BORROW, MODE_RETURN };
+LibraryMode currentMode = MODE_BORROW;
+
+const int MODE_BUTTON_PIN = 0;
+const unsigned long MODE_DEBOUNCE_MS = 220;
+bool lastButtonReading = HIGH;
+bool stableButtonState = HIGH;
+unsigned long lastButtonChange = 0;
 
 // =============== API URL ======================
 String apiBase() {
@@ -189,6 +202,28 @@ String uidToString() {
   return uid;
 }
 
+// =============== MODE HELPERS ==================
+String modeName() {
+  return currentMode == MODE_BORROW ? "BORROW" : "RETURN";
+}
+
+void printMode() {
+  Serial.println();
+  Serial.println("================================");
+  Serial.print("MODE: ");
+  Serial.println(modeName());
+  Serial.println(currentMode == MODE_BORROW
+    ? "Scan a STUDENT card, then a BOOK tag to ISSUE."
+    : "Scan a STUDENT card, then a BOOK tag to RETURN.");
+  Serial.println("Press BOOT (GPIO 0) or send b/r to switch mode.");
+  Serial.println("================================");
+}
+
+void toggleMode() {
+  currentMode = currentMode == MODE_BORROW ? MODE_RETURN : MODE_BORROW;
+  resetSession();
+}
+
 // =============== SCAN API ======================
 bool scanUidWithServer(
   const String& uid,
@@ -197,6 +232,11 @@ bool scanUidWithServer(
   JsonDocument request;
 
   request["uid"] = uid;
+  request["action"] = modeName();
+
+  if (!activeStudentId.isEmpty()) {
+    request["studentId"] = activeStudentId;
+  }
 
   String payload;
   serializeJson(request, payload);
@@ -232,10 +272,10 @@ bool scanUidWithServer(
 void resetSession() {
   activeStudentId = "";
   activeStudentName = "";
+  activeBorrowBatchId = "";
   waitingForBook = false;
 
-  Serial.println();
-  Serial.println("================================");
+  printMode();
   Serial.println("READY: SCAN STUDENT CARD FIRST");
   Serial.println("================================");
 }
@@ -255,6 +295,7 @@ void handleStudent(JsonDocument& data) {
 
   activeStudentId = student["id"].as<String>();
   activeStudentName = student["name"] | "Unknown";
+  activeBorrowBatchId = data["borrowBatchId"] | "";
 
   waitingForBook = true;
 
@@ -267,11 +308,35 @@ void handleStudent(JsonDocument& data) {
   Serial.print("Student Name: ");
   Serial.println(activeStudentName);
 
-  Serial.println("Now scan the BOOK tag.");
+  Serial.print("Active Books: ");
+  Serial.print(data["activeBooks"] | 0);
+  Serial.print(" / ");
+  Serial.println(data["maxBooks"] | 4);
+
+  if (!activeBorrowBatchId.isEmpty()) {
+    Serial.print("Borrow Batch: ");
+    Serial.println(activeBorrowBatchId);
+  }
+
+  bool canBorrow = student["can_borrow"] | true;
+  String studentStatus = student["status"] | "ACTIVE";
+
+  if (currentMode == MODE_BORROW &&
+      (!canBorrow || studentStatus != "ACTIVE")) {
+    Serial.println(studentStatus != "ACTIVE"
+      ? "[STUDENT] Inactive student cannot borrow."
+      : "[STUDENT] Borrowing limit reached (4/4). Return a book first.");
+    waitingForBook = false;
+    return;
+  }
+
+  Serial.println(currentMode == MODE_BORROW
+    ? "Now scan the BOOK tag to ISSUE it."
+    : "Now scan the BOOK tag to RETURN it.");
 }
 
 // =============== BOOK BORROW ===================
-void handleBook(JsonDocument& data) {
+void handleBorrowBook(JsonDocument& data) {
   JsonObject book = data["book"];
 
   if (book.isNull() || book["id"].isNull()) {
@@ -299,8 +364,6 @@ void handleBook(JsonDocument& data) {
 
   if (!available) {
     Serial.println("[BOOK] Book is unavailable or already borrowed.");
-
-    resetSession();
     return;
   }
 
@@ -308,6 +371,11 @@ void handleBook(JsonDocument& data) {
 
   request["studentId"] = activeStudentId;
   request["bookId"] = bookId;
+  request["rfidUid"] = book["uid"] | "";
+
+  if (!activeBorrowBatchId.isEmpty()) {
+    request["borrowBatchId"] = activeBorrowBatchId;
+  }
 
   String payload;
   serializeJson(request, payload);
@@ -347,11 +415,19 @@ void handleBook(JsonDocument& data) {
   Serial.print("Book ID: ");
   Serial.println(bookId);
 
+  Serial.print("Borrow Batch: ");
+  Serial.println(result["borrowBatchId"] | "");
+
   Serial.print("Issue Date: ");
   Serial.println(result["issueDate"] | "");
 
   Serial.print("Due Date: ");
   Serial.println(result["dueDate"] | "");
+
+  Serial.print("Active Books: ");
+  Serial.print(result["activeBooks"] | 0);
+  Serial.print(" / ");
+  Serial.println(result["maxBooks"] | 4);
 
   Serial.print("Status: ");
   Serial.println(result["status"] | "BORROWED");
@@ -360,6 +436,110 @@ void handleBook(JsonDocument& data) {
   Serial.println("Refresh your website to see the record.");
 
   resetSession();
+}
+
+// =============== BOOK RETURN ===================
+void handleReturnBook(JsonDocument& data) {
+  JsonObject book = data["book"];
+
+  if (book.isNull() || book["id"].isNull()) {
+    Serial.println("[ERROR] Book details missing.");
+
+    serializeJsonPretty(data, Serial);
+    Serial.println();
+
+    return;
+  }
+
+  String bookId = book["id"].as<String>();
+  String bookTitle = book["title"] | "Unknown title";
+
+  JsonObject activeBorrowing = data["activeBorrowing"];
+
+  Serial.println();
+  Serial.println("========== BOOK SCANNED ==========");
+
+  Serial.print("Book ID: ");
+  Serial.println(bookId);
+
+  Serial.print("Book Title: ");
+  Serial.println(bookTitle);
+
+  if (activeBorrowing.isNull() || activeBorrowing["id"].isNull()) {
+    Serial.println("[BOOK] This book has no active borrowing record.");
+    return;
+  }
+
+  String borrowerId = activeBorrowing["studentId"] | "";
+
+  if (!borrowerId.isEmpty() && borrowerId != activeStudentId) {
+    Serial.print("[BOOK] This book is borrowed by another student: ");
+    Serial.println(borrowerId);
+    return;
+  }
+
+  JsonDocument request;
+
+  request["studentId"] = activeStudentId;
+  request["bookId"] = bookId;
+  request["borrowingId"] = activeBorrowing["id"];
+  request["rfidUid"] = book["uid"] | "";
+
+  String payload;
+  serializeJson(request, payload);
+
+  String response;
+  int status = -1;
+
+  if (!postJson("/api/return", payload, response, status)) {
+    Serial.println("[ERROR] Return request failed.");
+    Serial.println("Fix the API and retry.");
+    return;
+  }
+
+  JsonDocument result;
+
+  DeserializationError error =
+    deserializeJson(result, response);
+
+  if (error) {
+    Serial.println("[JSON] Return response could not be parsed.");
+    resetSession();
+    return;
+  }
+
+  Serial.println();
+  Serial.println("======= BOOK RETURN SUCCESS ======");
+
+  Serial.print("Student: ");
+  Serial.println(activeStudentName);
+
+  Serial.print("Student ID: ");
+  Serial.println(activeStudentId);
+
+  Serial.print("Book: ");
+  Serial.println(bookTitle);
+
+  Serial.print("Book ID: ");
+  Serial.println(bookId);
+
+  Serial.print("Return Date: ");
+  Serial.println(result["returnDate"] | "");
+
+  Serial.print("Status: ");
+  Serial.println(result["status"] | "RETURNED");
+
+  Serial.println("Borrowing record updated by backend.");
+
+  resetSession();
+}
+
+void handleBook(JsonDocument& data) {
+  if (currentMode == MODE_RETURN) {
+    handleReturnBook(data);
+  } else {
+    handleBorrowBook(data);
+  }
 }
 
 // =============== CARD HANDLER ===================
@@ -485,6 +665,10 @@ void setup() {
     RFID_SS_PIN
   );
 
+  pinMode(MODE_BUTTON_PIN, INPUT_PULLUP);
+  lastButtonReading = digitalRead(MODE_BUTTON_PIN);
+  stableButtonState = lastButtonReading;
+
   rfid.PCD_Init();
   delay(100);
 
@@ -511,8 +695,46 @@ void setup() {
   resetSession();
 }
 
+// =============== MODE BUTTON / SERIAL ============
+void pollModeControls() {
+  // BOOT button on most ESP32 dev boards is GPIO 0, active LOW.
+  bool reading = digitalRead(MODE_BUTTON_PIN);
+
+  if (reading != lastButtonReading) {
+    lastButtonChange = millis();
+    lastButtonReading = reading;
+  }
+
+  if (millis() - lastButtonChange > MODE_DEBOUNCE_MS &&
+      reading != stableButtonState) {
+    stableButtonState = reading;
+
+    if (stableButtonState == LOW) {
+      toggleMode();
+    }
+  }
+
+  while (Serial.available() > 0) {
+    char command = Serial.read();
+
+    if (command == 'b' || command == 'B') {
+      currentMode = MODE_BORROW;
+      resetSession();
+    }
+    else if (command == 'r' || command == 'R') {
+      currentMode = MODE_RETURN;
+      resetSession();
+    }
+    else if (command == 's' || command == 'S') {
+      printMode();
+    }
+  }
+}
+
 // =============== MAIN LOOP =======================
 void loop() {
+  pollModeControls();
+
   if (WiFi.status() != WL_CONNECTED) {
     static unsigned long lastReconnect = 0;
 
