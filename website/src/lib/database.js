@@ -108,6 +108,8 @@ export const db = {
     databases.createDocument(DB_ID, BOR_COL, ID.unique(), data),
   updateBorrowing: (docId, data) =>
     databases.updateDocument(DB_ID, BOR_COL, docId, data),
+  deleteBorrowing: (docId) =>
+    databases.deleteDocument(DB_ID, BOR_COL, docId),
 
   /* ─── ScanLogs (optional collection) ────────────── */
   getScanLogs: () => SCAN_COL ? listAll(SCAN_COL) : Promise.resolve([]),

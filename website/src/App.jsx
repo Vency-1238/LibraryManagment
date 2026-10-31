@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { db, MAX_ACTIVE_BOOKS } from "./lib/database.js";
 import { client, DB_ID, S_COL, B_COL, BOR_COL, SCAN_COL } from "./lib/appwrite.js";
-import { returnBook as returnBookViaApi } from "./lib/api.js";
+import { returnBook as returnBookViaApi, deleteBorrowing as deleteBorrowingViaApi } from "./lib/api.js";
 
 /* ══════════════════════════════════════════════════════════
    UTILITIES
@@ -831,6 +831,8 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
   const [filt, setFilt]      = useState("ALL");
   const [q, setQ]            = useState("");
   const [returning, setRet]  = useState(null);
+  const [delTarget, setDel]  = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const sMap = new Map(students.map((s) => [s.studentId, s.name]));
   const bMap = new Map(books.map((b) => [b.bookId, b]));
@@ -898,12 +900,32 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
     finally { setRet(null); }
   }
 
+  async function handleDelete() {
+    if (!delTarget) return;
+    setDeleting(true);
+    try {
+      try {
+        await deleteBorrowingViaApi(delTarget.$id);
+      } catch (apiError) {
+        if (!import.meta.env.DEV || !apiError.unavailable) throw apiError;
+        await db.deleteBorrowing(delTarget.$id);
+      }
+      setDel(null);
+      toast("Borrowing entry deleted");
+      onRefresh();
+    } catch (err) {
+      toast(err.message || "Delete failed", "error");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <div className="page">
       <div className="pg-head">
         <div>
           <h2>Borrowing History</h2>
-          <p>Every borrowing transaction is kept permanently. Returning a book updates the same record.</p>
+          <p>Returning a book updates the record. Completed entries can be deleted when no longer needed.</p>
         </div>
         <span className="cnt-chip">{borrowings.length} total record{borrowings.length === 1 ? "" : "s"}</span>
       </div>
@@ -975,7 +997,13 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
                             <Ic.ret /> {returning === r.$id ? "…" : "Return"}
                           </button>
                         ) : (
-                          <span className="muted mono-sm">Completed</span>
+                          <button
+                            className="btn btn-del btn-sm"
+                            onClick={() => setDel(r)}
+                            disabled={deleting && delTarget?.$id === r.$id}
+                          >
+                            <Ic.trash /> Delete
+                          </button>
                         )}
                       </td>
                     </tr>
@@ -986,6 +1014,14 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={!!delTarget}
+        title="Delete Borrowing Entry"
+        message={`Delete borrowing record "${delTarget?.$id}"? This cannot be undone.`}
+        onConfirm={handleDelete}
+        onCancel={() => setDel(null)}
+        loading={deleting}
+      />
     </div>
   );
 }

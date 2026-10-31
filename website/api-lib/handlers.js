@@ -744,14 +744,16 @@ async function returnBook(req, res) {
   });
 }
 
-/* Borrowing history is permanent: records are updated on return, never removed.
-   The internal rollback helper above is the only code allowed to delete a
-   record, and only for a borrow that lost a concurrency race. */
-async function deleteBorrowing(req, res) {
-  return send(res, 403, {
-    error: "Borrowing history is permanent and cannot be deleted",
-    code: "HISTORY_IMMUTABLE"
-  });
+async function deleteBorrowing(req, res, borrowingId) {
+  const record = await db.findBorrowById(borrowingId);
+  if (record.status === "BORROWED") {
+    return send(res, 409, {
+      error: "Active borrowing records must be returned before deletion",
+      code: "ACTIVE_BORROWING"
+    });
+  }
+  await db.deleteBorrowRecord(record.id);
+  return send(res, 200, { message: "Borrowing entry deleted", borrowingId: record.id });
 }
 
 async function listScanLogs(req, res) {
