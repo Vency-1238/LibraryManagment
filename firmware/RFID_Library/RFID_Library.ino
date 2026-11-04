@@ -1,799 +1,126 @@
 
 #include <WiFi.h>
-#include <HTTPClient.h>
 #include <WiFiClientSecure.h>
-#include <ArduinoJson.h>
+#include <HTTPClient.h>
 #include <SPI.h>
 #include <MFRC522.h>
+#include <ArduinoJson.h>
 
-// ================================================
-// WIFI SETTINGS
-// ================================================
+// =====================================
+// 1. WIFI CONFIGURATION
+// =====================================
+
 const char* WIFI_SSID = "Network";
 const char* WIFI_PASSWORD = "11111111";
 
-// ================================================
-// YOUR NEW WEBSITE URL
-// ================================================
-const char* API_BASE_URL =
+// Use a PUBLIC Vercel deployment URL.
+// Do not use a deployment protected by Vercel Authentication.
+const char* SERVER_URL =
   "https://website-git-main-vencys-projects-01e76e39.vercel.app";
 
-// ================================================
-// RFID PINS
-// ================================================
-#define RFID_SS_PIN   5
-#define RFID_RST_PIN  22
-#define RFID_SCK_PIN  18
-#define RFID_MISO_PIN 19
-#define RFID_MOSI_PIN 23
+// =====================================
+// 2. RFID PIN CONFIGURATION
+// =====================================
 
-MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
+// Shared SPI pins
+#define SPI_SCK  18
+#define SPI_MISO 19
+#define SPI_MOSI 23
 
-WiFiClientSecure tlsClient;
-WiFiClient plainClient;
+// ENTRY reader: Borrow
+#define ENTRY_SS  5
+#define ENTRY_RST 22
 
-// ================================================
-// LIBRARY SETTINGS
-// ================================================
-const int MAX_BOOKS = 4;
+// RETURN reader: Return
+#define RETURN_SS  21
+#define RETURN_RST 27
 
-enum LibraryMode {
-  MODE_BORROW,
-  MODE_RETURN
+// Shared new-student button
+#define BUTTON_PIN 32
+
+// =====================================
+// 3. RFID OBJECTS
+// =====================================
+
+MFRC522 entryReader(ENTRY_SS, ENTRY_RST);
+MFRC522 returnReader(RETURN_SS, RETURN_RST);
+
+// =====================================
+// 4. STUDENT SESSION
+// =====================================
+
+struct StudentSession {
+  bool active = false;
+  String studentId = "";
+  String studentName = "";
+  String lastUID = "";
+  unsigned long lastScanTime = 0;
 };
 
-LibraryMode currentMode = MODE_BORROW;
+StudentSession entrySession;
+StudentSession returnSession;
 
-// BOOT button
-const int MODE_BUTTON_PIN = 0;
-const unsigned long MODE_DEBOUNCE_MS = 220;
+bool lastButtonState = HIGH;
+unsigned long lastButtonTime = 0;
 
-bool lastButtonReading = HIGH;
-bool stableButtonState = HIGH;
-unsigned long lastButtonChange = 0;
+const unsigned long BUTTON_DEBOUNCE = 250;
+const unsigned long RFID_COOLDOWN = 1500;
 
-// ================================================
-// SESSION DATA
-// ================================================
-String activeStudentId = "";
-String activeStudentName = "";
-String activeBorrowBatchId = "";
+// =====================================
+// 5. HELPER FUNCTIONS
+// =====================================
 
-bool waitingForBook = false;
-
-String lastProcessedUID = "";
-unsigned long lastProcessedTime = 0;
-
-const unsigned long SCAN_COOLDOWN_MS = 1500;
-
-// ================================================
-// API URL HELPERS
-// ================================================
-String apiBase() {
-  String base = String(API_BASE_URL);
-
-  while (base.endsWith("/")) {
-    base.remove(base.length() - 1);
-  }
-
-  return base;
-}
-
-String apiUrl(const String& path) {
-  if (path.startsWith("/")) {
-    return apiBase() + path;
-  }
-
-  return apiBase() + "/" + path;
-}
-
-String modeName() {
-  return currentMode == MODE_BORROW ? "BORROW" : "RETURN";
-}
-
-// ================================================
-// HTTP INITIALIZATION
-// ================================================
-bool beginHttp(HTTPClient& http, const String& url) {
-
-  http.setConnectTimeout(15000);
-  http.setTimeout(20000);
-
-  http.setFollowRedirects(
-    HTTPC_STRICT_FOLLOW_REDIRECTS
-  );
-
-  if (url.startsWith("https://")) {
-    return http.begin(tlsClient, url);
-  }
-
-  return http.begin(plainClient, url);
-}
-
-// ================================================
-// HTTP RESPONSE
-// ================================================
-void printHttpResult(
-  int status,
-  const String& response
-) {
-  Serial.print("[HTTP] Status: ");
-  Serial.println(status);
-
-  if (response.length() > 0) {
-    Serial.println("[HTTP] Response:");
-    Serial.println(response);
-  }
-
-  if (status == 401 || status == 403) {
-    Serial.println("[ERROR] Website/API requires authorization.");
-  }
-  else if (status == 404) {
-    Serial.println("[ERROR] API route not found.");
-  }
-  else if (status >= 500) {
-    Serial.println("[ERROR] Server error.");
-  }
-}
-
-// ================================================
-// POST JSON
-// ================================================
-bool postJson(
-  const String& path,
-  const String& payload,
-  String& responseBody,
-  int& statusCode
-) {
-  responseBody = "";
-  statusCode = -1;
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Not connected.");
-    return false;
-  }
-
-  String url = apiUrl(path);
-
-  HTTPClient http;
-
-  Serial.println();
-  Serial.println("[HTTP] POST: " + url);
-  Serial.println("[HTTP] Request: " + payload);
-
-  if (!beginHttp(http, url)) {
-    Serial.println("[HTTP] Initialization failed.");
-    return false;
-  }
-
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("Accept", "application/json");
-
-  statusCode = http.POST(payload);
-
-  if (statusCode > 0) {
-    responseBody = http.getString();
-  } else {
-    Serial.print("[HTTP] Error: ");
-    Serial.println(http.errorToString(statusCode));
-  }
-
-  http.end();
-
-  printHttpResult(statusCode, responseBody);
-
-  return statusCode >= 200 && statusCode < 300;
-}
-
-// ================================================
-// GET JSON
-// ================================================
-bool getJson(
-  const String& path,
-  String& responseBody,
-  int& statusCode
-) {
-  responseBody = "";
-  statusCode = -1;
-
-  if (WiFi.status() != WL_CONNECTED) {
-    return false;
-  }
-
-  HTTPClient http;
-
-  String url = apiUrl(path);
-
-  Serial.println("[HTTP] GET: " + url);
-
-  if (!beginHttp(http, url)) {
-    return false;
-  }
-
-  http.addHeader("Accept", "application/json");
-
-  statusCode = http.GET();
-
-  if (statusCode > 0) {
-    responseBody = http.getString();
-  }
-
-  http.end();
-
-  printHttpResult(statusCode, responseBody);
-
-  return statusCode >= 200 && statusCode < 300;
-}
-
-// ================================================
-// RFID UID CONVERSION
-// ================================================
-String uidToString() {
+String getUID(MFRC522 &reader) {
   String uid = "";
 
-  for (byte i = 0; i < rfid.uid.size; i++) {
-
-    if (rfid.uid.uidByte[i] < 0x10) {
+  for (byte i = 0; i < reader.uid.size; i++) {
+    if (reader.uid.uidByte[i] < 0x10) {
       uid += "0";
     }
 
-    uid += String(
-      rfid.uid.uidByte[i],
-      HEX
-    );
+    uid += String(reader.uid.uidByte[i], HEX);
   }
 
   uid.toUpperCase();
-
   return uid;
 }
 
-// ================================================
-// RESET SESSION
-// ================================================
-void resetSession() {
+String jsonValueToString(JsonVariant value) {
+  if (value.is<const char*>()) {
+    return String(value.as<const char*>());
+  }
 
-  activeStudentId = "";
-  activeStudentName = "";
-  activeBorrowBatchId = "";
+  if (value.is<long>()) {
+    return String(value.as<long>());
+  }
 
-  waitingForBook = false;
+  if (value.is<int>()) {
+    return String(value.as<int>());
+  }
 
-  Serial.println();
-  Serial.println("================================");
-
-  Serial.print("CURRENT MODE: ");
-  Serial.println(modeName());
-
-  Serial.println("READY: SCAN STUDENT CARD FIRST");
-
-  Serial.println("================================");
+  return "";
 }
 
-// ================================================
-// MODE DISPLAY
-// ================================================
-void printMode() {
-
-  Serial.println();
-  Serial.println("================================");
-
-  Serial.print("MODE: ");
-  Serial.println(modeName());
-
-  if (currentMode == MODE_BORROW) {
-    Serial.println("Scan STUDENT, then BOOK to borrow.");
-  } else {
-    Serial.println("Scan STUDENT, then BOOK to return.");
-  }
-
-  Serial.println("BOOT button or Serial b/r switches mode.");
-
-  Serial.println("================================");
+void finishCard(MFRC522 &reader) {
+  reader.PICC_HaltA();
+  reader.PCD_StopCrypto1();
 }
 
-// ================================================
-// SWITCH MODE
-// ================================================
-void toggleMode() {
+// =====================================
+// 6. WIFI CONNECTION
+// =====================================
 
-  currentMode =
-    currentMode == MODE_BORROW
-      ? MODE_RETURN
-      : MODE_BORROW;
-
-  Serial.println("[MODE] Mode changed.");
-
-  resetSession();
-}
-
-// ================================================
-// SCAN UID WITH BACKEND
-// ================================================
-bool scanUidWithServer(
-  const String& uid,
-  JsonDocument& result
-) {
-  JsonDocument request;
-
-  request["uid"] = uid;
-  request["action"] = modeName();
-
-  if (!activeStudentId.isEmpty()) {
-    request["studentId"] = activeStudentId;
-  }
-
-  String payload;
-
-  serializeJson(request, payload);
-
-  String response;
-  int status = -1;
-
-  if (!postJson(
-    "/api/scan",
-    payload,
-    response,
-    status
-  )) {
-    Serial.println("[SCAN] Backend request failed.");
-    return false;
-  }
-
-  DeserializationError error =
-    deserializeJson(result, response);
-
-  if (error) {
-    Serial.print("[JSON] Error: ");
-    Serial.println(error.c_str());
-
-    return false;
-  }
-
-  return true;
-}
-
-// ================================================
-// STUDENT VERIFICATION
-// ================================================
-void handleStudent(JsonDocument& data) {
-
-  JsonObject student = data["student"];
-
-  if (
-    student.isNull() ||
-    student["id"].isNull()
-  ) {
-    Serial.println("[ERROR] Student data missing.");
-
-    serializeJsonPretty(data, Serial);
-    Serial.println();
-
-    return;
-  }
-
-  activeStudentId =
-    student["id"].as<String>();
-
-  activeStudentName =
-    student["name"] | "Unknown";
-
-  activeBorrowBatchId =
-    data["borrowBatchId"] | "";
-
-  waitingForBook = true;
-
-  int activeBooks =
-    data["activeBooks"] | 0;
-
-  int maxBooks =
-    data["maxBooks"] | MAX_BOOKS;
-
-  bool canBorrow =
-    student["can_borrow"] | true;
-
-  String studentStatus =
-    student["status"] | "ACTIVE";
-
+void connectWiFi() {
   Serial.println();
-  Serial.println("======= STUDENT VERIFIED =======");
-
-  Serial.print("Student ID: ");
-  Serial.println(activeStudentId);
-
-  Serial.print("Student Name: ");
-  Serial.println(activeStudentName);
-
-  Serial.print("Active Books: ");
-  Serial.print(activeBooks);
-  Serial.print(" / ");
-  Serial.println(maxBooks);
-
-  Serial.print("Remaining Capacity: ");
-  Serial.println(
-    max(0, maxBooks - activeBooks)
-  );
-
-  if (currentMode == MODE_BORROW) {
-
-    if (studentStatus != "ACTIVE") {
-      Serial.println("[ERROR] Student is inactive.");
-
-      waitingForBook = false;
-      return;
-    }
-
-    if (!canBorrow || activeBooks >= MAX_BOOKS) {
-      Serial.println("[ERROR] Borrowing limit reached.");
-
-      Serial.println("Return a book before borrowing another.");
-
-      waitingForBook = false;
-      return;
-    }
-  }
-
-  if (!activeBorrowBatchId.isEmpty()) {
-    Serial.print("Borrow Batch: ");
-    Serial.println(activeBorrowBatchId);
-  }
-
-  Serial.println();
-
-  if (currentMode == MODE_BORROW) {
-    Serial.println("Now scan the BOOK tag to BORROW.");
-  } else {
-    Serial.println("Now scan the BOOK tag to RETURN.");
-  }
-}
-
-// ================================================
-// BORROW BOOK
-// ================================================
-void handleBorrowBook(JsonDocument& data) {
-
-  JsonObject book = data["book"];
-
-  if (
-    book.isNull() ||
-    book["id"].isNull()
-  ) {
-    Serial.println("[ERROR] Book details missing.");
-
-    serializeJsonPretty(data, Serial);
-    Serial.println();
-
-    return;
-  }
-
-  String bookId =
-    book["id"].as<String>();
-
-  String bookTitle =
-    book["title"] | "Unknown title";
-
-  bool available =
-    data["available"] | false;
-
-  Serial.println();
-  Serial.println("========== BOOK SCANNED ==========");
-
-  Serial.print("Book ID: ");
-  Serial.println(bookId);
-
-  Serial.print("Book Title: ");
-  Serial.println(bookTitle);
-
-  if (!available) {
-    Serial.println("[ERROR] Book is unavailable.");
-    return;
-  }
-
-  JsonDocument request;
-
-  request["studentId"] = activeStudentId;
-  request["bookId"] = bookId;
-  request["rfidUid"] = book["uid"] | "";
-
-  if (!activeBorrowBatchId.isEmpty()) {
-    request["borrowBatchId"] = activeBorrowBatchId;
-  }
-
-  String payload;
-
-  serializeJson(request, payload);
-
-  String response;
-  int status = -1;
-
-  if (!postJson(
-    "/api/borrow",
-    payload,
-    response,
-    status
-  )) {
-    Serial.println("[ERROR] Borrow failed.");
-
-    Serial.println("Check backend response before retrying.");
-
-    return;
-  }
-
-  JsonDocument result;
-
-  DeserializationError error =
-    deserializeJson(result, response);
-
-  if (error) {
-    Serial.println("[JSON] Invalid borrow response.");
-
-    resetSession();
-    return;
-  }
-
-  Serial.println();
-  Serial.println("======= BOOK ISSUE SUCCESS =======");
-
-  Serial.print("Student: ");
-  Serial.println(activeStudentName);
-
-  Serial.print("Student ID: ");
-  Serial.println(activeStudentId);
-
-  Serial.print("Book: ");
-  Serial.println(bookTitle);
-
-  Serial.print("Book ID: ");
-  Serial.println(bookId);
-
-  Serial.print("Borrow Batch: ");
-  Serial.println(
-    result["borrowBatchId"] | ""
-  );
-
-  Serial.print("Issue Date: ");
-  Serial.println(
-    result["issueDate"] | ""
-  );
-
-  Serial.print("Due Date: ");
-  Serial.println(
-    result["dueDate"] | ""
-  );
-
-  Serial.print("Active Books: ");
-  Serial.print(result["activeBooks"] | 0);
-  Serial.print(" / ");
-  Serial.println(result["maxBooks"] | MAX_BOOKS);
-
-  Serial.print("Status: ");
-  Serial.println(result["status"] | "BORROWED");
-
-  Serial.println("[SUCCESS] Borrow record saved.");
-
-  resetSession();
-}
-
-// ================================================
-// RETURN BOOK
-// ================================================
-void handleReturnBook(JsonDocument& data) {
-
-  JsonObject book = data["book"];
-
-  if (
-    book.isNull() ||
-    book["id"].isNull()
-  ) {
-    Serial.println("[ERROR] Book details missing.");
-
-    serializeJsonPretty(data, Serial);
-    Serial.println();
-
-    return;
-  }
-
-  String bookId =
-    book["id"].as<String>();
-
-  String bookTitle =
-    book["title"] | "Unknown title";
-
-  JsonObject activeBorrowing =
-    data["activeBorrowing"];
-
-  Serial.println();
-  Serial.println("========== BOOK SCANNED ==========");
-
-  Serial.print("Book ID: ");
-  Serial.println(bookId);
-
-  Serial.print("Book Title: ");
-  Serial.println(bookTitle);
-
-  if (
-    activeBorrowing.isNull() ||
-    activeBorrowing["id"].isNull()
-  ) {
-    Serial.println("[ERROR] No active borrowing record.");
-    return;
-  }
-
-  String borrowerId =
-    activeBorrowing["studentId"] | "";
-
-  if (
-    !borrowerId.isEmpty() &&
-    borrowerId != activeStudentId
-  ) {
-    Serial.println("[ERROR] Book belongs to another student.");
-    return;
-  }
-
-  JsonDocument request;
-
-  request["studentId"] = activeStudentId;
-  request["bookId"] = bookId;
-
-  request["borrowingId"] =
-    activeBorrowing["id"];
-
-  request["rfidUid"] =
-    book["uid"] | "";
-
-  String payload;
-
-  serializeJson(request, payload);
-
-  String response;
-  int status = -1;
-
-  if (!postJson(
-    "/api/return",
-    payload,
-    response,
-    status
-  )) {
-    Serial.println("[ERROR] Return request failed.");
-    return;
-  }
-
-  JsonDocument result;
-
-  DeserializationError error =
-    deserializeJson(result, response);
-
-  if (error) {
-    Serial.println("[JSON] Invalid return response.");
-
-    resetSession();
-    return;
-  }
-
-  Serial.println();
-  Serial.println("======= BOOK RETURN SUCCESS ======");
-
-  Serial.print("Student: ");
-  Serial.println(activeStudentName);
-
-  Serial.print("Student ID: ");
-  Serial.println(activeStudentId);
-
-  Serial.print("Book: ");
-  Serial.println(bookTitle);
-
-  Serial.print("Book ID: ");
-  Serial.println(bookId);
-
-  Serial.print("Return Date: ");
-  Serial.println(
-    result["returnDate"] | ""
-  );
-
-  Serial.print("Status: ");
-  Serial.println(
-    result["status"] | "RETURNED"
-  );
-
-  Serial.println("[SUCCESS] Borrowing record updated.");
-
-  resetSession();
-}
-
-// ================================================
-// BOOK HANDLER
-// ================================================
-void handleBook(JsonDocument& data) {
-
-  if (currentMode == MODE_RETURN) {
-    handleReturnBook(data);
-  } else {
-    handleBorrowBook(data);
-  }
-}
-
-// ================================================
-// CARD HANDLER
-// ================================================
-void handleCard(const String& uid) {
-
-  Serial.println();
-  Serial.println("--------------------------------");
-
-  Serial.print("Scanned UID: ");
-  Serial.println(uid);
-
-  Serial.println("Checking UID with backend...");
-
-  JsonDocument data;
-
-  if (!scanUidWithServer(uid, data)) {
-    Serial.println("[SCAN FAILED] Check API and UID.");
-    return;
-  }
-
-  String type = data["type"] | "";
-
-  if (type == "STUDENT") {
-
-    String scannedStudentId =
-      data["student"]["id"].as<String>();
-
-    if (
-      waitingForBook &&
-      scannedStudentId == activeStudentId
-    ) {
-      Serial.println("[RFID] Student already verified.");
-      Serial.println("Scan the book tag.");
-    } else {
-      if (waitingForBook) {
-        Serial.println("[RFID] Switching student.");
-      }
-
-      handleStudent(data);
-    }
-
-    return;
-  }
-
-  if (type == "BOOK") {
-
-    if (
-      !waitingForBook ||
-      activeStudentId.isEmpty()
-    ) {
-      Serial.println("[RFID] Scan student card first.");
-      return;
-    }
-
-    handleBook(data);
-    return;
-  }
-
-  Serial.println("[API] Unexpected response:");
-
-  serializeJsonPretty(data, Serial);
-  Serial.println();
-}
-
-// ================================================
-// WIFI CONNECTION
-// ================================================
-bool connectWiFi() {
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(WIFI_SSID);
 
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  Serial.print("[WiFi] Connecting");
 
   int attempts = 0;
 
-  while (
-    WiFi.status() != WL_CONNECTED &&
-    attempts < 40
-  ) {
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
     delay(500);
     Serial.print(".");
     attempts++;
@@ -801,204 +128,432 @@ bool connectWiFi() {
 
   Serial.println();
 
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi connected!");
+    Serial.print("ESP32 IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("WiFi connection failed!");
+  }
+}
+
+// =====================================
+// 7. SEND JSON TO WEBSITE
+// =====================================
+
+bool postToServer(
+  const char* endpoint,
+  JsonDocument &request,
+  JsonDocument &response
+) {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Connection failed.");
+    Serial.println("WiFi disconnected!");
     return false;
   }
 
-  Serial.println("[WiFi] Connected.");
+  WiFiClientSecure client;
 
-  Serial.print("[WiFi] ESP32 IP: ");
-  Serial.println(WiFi.localIP());
+  // Testing only. For production, verify the server certificate.
+  client.setInsecure();
 
-  Serial.print("[API] Website: ");
-  Serial.println(apiBase());
+  HTTPClient http;
 
-  String healthResponse;
-  int healthStatus = -1;
+  String url = String(SERVER_URL) + endpoint;
 
-  bool healthOk = getJson(
-    "/api/health",
-    healthResponse,
-    healthStatus
-  );
+  Serial.print("POST: ");
+  Serial.println(url);
 
-  if (healthOk) {
-    Serial.println("[API] Health endpoint reachable.");
-  } else {
-    Serial.println("[API] Health check failed.");
-    Serial.println("Verify /api/health exists on Vercel.");
+  if (!http.begin(client, url)) {
+    Serial.println("HTTP connection failed!");
+    return false;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(15000);
+
+  String requestBody;
+  serializeJson(request, requestBody);
+
+  Serial.print("Request: ");
+  Serial.println(requestBody);
+
+  int httpCode = http.POST(requestBody);
+
+  Serial.print("HTTP Status: ");
+  Serial.println(httpCode);
+
+  String responseBody = http.getString();
+
+  Serial.print("Response: ");
+  Serial.println(responseBody);
+
+  http.end();
+
+  if (httpCode < 200 || httpCode >= 300) {
+    Serial.println("Server request failed!");
+    return false;
+  }
+
+  DeserializationError error =
+    deserializeJson(response, responseBody);
+
+  if (error) {
+    Serial.print("JSON parsing failed: ");
+    Serial.println(error.c_str());
+    return false;
   }
 
   return true;
 }
 
-// ================================================
-// MODE CONTROLS
-// ================================================
-void pollModeControls() {
+// =====================================
+// 8. SCAN STUDENT CARD
+// =====================================
 
-  bool reading =
-    digitalRead(MODE_BUTTON_PIN);
+bool scanStudent(
+  String uid,
+  const char* action,
+  StudentSession &session
+) {
+  JsonDocument request;
+  JsonDocument response;
 
-  if (reading != lastButtonReading) {
-    lastButtonChange = millis();
-    lastButtonReading = reading;
+  request["uid"] = uid;
+  request["action"] = action;
+
+  if (!postToServer("/api/scan", request, response)) {
+    return false;
   }
 
-  if (
-    millis() - lastButtonChange > MODE_DEBOUNCE_MS &&
-    reading != stableButtonState
-  ) {
-    stableButtonState = reading;
+  String type = response["type"] | "";
 
-    if (stableButtonState == LOW) {
-      toggleMode();
-    }
+  if (type != "STUDENT") {
+    Serial.println("This card is not registered as a student!");
+    return false;
   }
 
-  while (Serial.available() > 0) {
+  String studentId =
+    jsonValueToString(response["student"]["id"]);
 
-    char command = Serial.read();
+  String studentName =
+    response["student"]["name"] | "";
 
-    if (command == 'b' || command == 'B') {
-      currentMode = MODE_BORROW;
-      resetSession();
+  if (studentId.length() == 0) {
+    Serial.println("Student ID missing in server response!");
+    return false;
+  }
+
+  session.active = true;
+  session.studentId = studentId;
+  session.studentName = studentName;
+
+  Serial.println();
+  Serial.println("STUDENT VERIFIED SUCCESSFULLY");
+  Serial.print("Student ID: ");
+  Serial.println(session.studentId);
+  Serial.print("Student Name: ");
+  Serial.println(session.studentName);
+
+  Serial.println("Now scan book RFID tags.");
+  return true;
+}
+
+// =====================================
+// 9. SCAN BOOK CARD
+// =====================================
+
+void scanBook(
+  String uid,
+  const char* action,
+  StudentSession &session
+) {
+  JsonDocument request;
+  JsonDocument response;
+
+  request["uid"] = uid;
+  request["action"] = action;
+  request["studentId"] = session.studentId;
+
+  if (!postToServer("/api/scan", request, response)) {
+    return;
+  }
+
+  String type = response["type"] | "";
+
+  if (type != "BOOK") {
+    Serial.println("This RFID is not registered as a book!");
+    return;
+  }
+
+  String bookId =
+    jsonValueToString(response["book"]["id"]);
+
+  String bookTitle =
+    response["book"]["title"] | "";
+
+  if (bookId.length() == 0) {
+    Serial.println("Book ID missing!");
+    return;
+  }
+
+  Serial.println();
+  Serial.print("Book found: ");
+  Serial.println(bookTitle);
+  Serial.print("Book ID: ");
+  Serial.println(bookId);
+
+  // =================================
+  // BORROW BOOK
+  // =================================
+
+  if (String(action) == "BORROW") {
+
+    bool available = response["available"] | false;
+
+    if (!available) {
+      Serial.println("Book is not available for borrowing!");
+      return;
     }
 
-    else if (command == 'r' || command == 'R') {
-      currentMode = MODE_RETURN;
-      resetSession();
+    JsonDocument borrowRequest;
+    JsonDocument borrowResponse;
+
+    borrowRequest["studentId"] = session.studentId;
+    borrowRequest["bookId"] = bookId;
+    borrowRequest["rfidUid"] = uid;
+
+    String batchId =
+      jsonValueToString(response["borrowBatchId"]);
+
+    if (batchId.length() > 0) {
+      borrowRequest["borrowBatchId"] = batchId;
     }
 
-    else if (command == 's' || command == 'S') {
-      printMode();
+    if (!postToServer(
+      "/api/borrow",
+      borrowRequest,
+      borrowResponse
+    )) {
+      return;
     }
+
+    Serial.println();
+    Serial.println("BOOK BORROWED SUCCESSFULLY!");
+
+    Serial.print("Issue Date: ");
+    Serial.println(
+      borrowResponse["issueDate"] | "Not provided"
+    );
+
+    Serial.print("Due Date: ");
+    Serial.println(
+      borrowResponse["dueDate"] | "Not provided"
+    );
+  }
+
+  // =================================
+  // RETURN BOOK
+  // =================================
+
+  else if (String(action) == "RETURN") {
+
+    String borrowingId =
+      jsonValueToString(response["activeBorrowing"]["id"]);
+
+    if (borrowingId.length() == 0) {
+      Serial.println("No active borrowing record found!");
+      return;
+    }
+
+    JsonDocument returnRequest;
+    JsonDocument returnResponse;
+
+    returnRequest["studentId"] = session.studentId;
+    returnRequest["bookId"] = bookId;
+    returnRequest["borrowingId"] = borrowingId;
+    returnRequest["rfidUid"] = uid;
+
+    if (!postToServer(
+      "/api/return",
+      returnRequest,
+      returnResponse
+    )) {
+      return;
+    }
+
+    Serial.println();
+    Serial.println("BOOK RETURNED SUCCESSFULLY!");
+
+    Serial.print("Return Date: ");
+    Serial.println(
+      returnResponse["returnDate"] | "Not provided"
+    );
   }
 }
 
-// ================================================
-// SETUP
-// ================================================
+// =====================================
+// 10. HANDLE ENTRY READER
+// =====================================
+
+void handleEntryReader() {
+
+  if (!entryReader.PICC_IsNewCardPresent()) return;
+  if (!entryReader.PICC_ReadCardSerial()) return;
+
+  String uid = getUID(entryReader);
+
+  if (uid == entrySession.lastUID &&
+      millis() - entrySession.lastScanTime < RFID_COOLDOWN) {
+    finishCard(entryReader);
+    return;
+  }
+
+  entrySession.lastUID = uid;
+  entrySession.lastScanTime = millis();
+
+  Serial.println();
+  Serial.println("========== ENTRY READER ==========");
+  Serial.print("Scanned UID: ");
+  Serial.println(uid);
+
+  if (!entrySession.active) {
+    scanStudent(uid, "BORROW", entrySession);
+  } else {
+    scanBook(uid, "BORROW", entrySession);
+  }
+
+  finishCard(entryReader);
+}
+
+// =====================================
+// 11. HANDLE RETURN READER
+// =====================================
+
+void handleReturnReader() {
+
+  if (!returnReader.PICC_IsNewCardPresent()) return;
+  if (!returnReader.PICC_ReadCardSerial()) return;
+
+  String uid = getUID(returnReader);
+
+  if (uid == returnSession.lastUID &&
+      millis() - returnSession.lastScanTime < RFID_COOLDOWN) {
+    finishCard(returnReader);
+    return;
+  }
+
+  returnSession.lastUID = uid;
+  returnSession.lastScanTime = millis();
+
+  Serial.println();
+  Serial.println("========== RETURN READER ==========");
+  Serial.print("Scanned UID: ");
+  Serial.println(uid);
+
+  if (!returnSession.active) {
+    scanStudent(uid, "RETURN", returnSession);
+  } else {
+    scanBook(uid, "RETURN", returnSession);
+  }
+
+  finishCard(returnReader);
+}
+
+// =====================================
+// 12. SHARED NEW-STUDENT BUTTON
+// =====================================
+
+void handleButton() {
+
+  bool buttonState = digitalRead(BUTTON_PIN);
+
+  if (lastButtonState == HIGH && buttonState == LOW) {
+
+    if (millis() - lastButtonTime > BUTTON_DEBOUNCE) {
+
+      lastButtonTime = millis();
+
+      entrySession.active = false;
+      entrySession.studentId = "";
+      entrySession.studentName = "";
+      entrySession.lastUID = "";
+
+      returnSession.active = false;
+      returnSession.studentId = "";
+      returnSession.studentName = "";
+      returnSession.lastUID = "";
+
+      Serial.println();
+      Serial.println("================================");
+      Serial.println("NEW STUDENT SESSION STARTED");
+      Serial.println("Both readers are ready.");
+      Serial.println("Scan a student ID first.");
+      Serial.println("================================");
+    }
+  }
+
+  lastButtonState = buttonState;
+}
+
+// =====================================
+// 13. SETUP
+// =====================================
+
 void setup() {
 
   Serial.begin(115200);
   delay(1000);
 
   Serial.println();
-  Serial.println("==========================================");
-  Serial.println("     SMART RFID LIBRARY MANAGEMENT");
-  Serial.println("==========================================");
+  Serial.println("SMART RFID LIBRARY SYSTEM");
+  Serial.println("Two Reader Configuration");
 
-  // Initialize SPI
-  SPI.begin(
-    RFID_SCK_PIN,
-    RFID_MISO_PIN,
-    RFID_MOSI_PIN,
-    RFID_SS_PIN
-  );
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // Initialize button
-  pinMode(MODE_BUTTON_PIN, INPUT_PULLUP);
+  // Shared SPI bus
+  SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
 
-  lastButtonReading =
-    digitalRead(MODE_BUTTON_PIN);
+  // Initialize ENTRY reader
+  pinMode(ENTRY_SS, OUTPUT);
+  pinMode(RETURN_SS, OUTPUT);
 
-  stableButtonState = lastButtonReading;
+  digitalWrite(ENTRY_SS, HIGH);
+  digitalWrite(RETURN_SS, HIGH);
 
-  // Initialize RFID
-  rfid.PCD_Init();
-  delay(100);
+  entryReader.PCD_Init();
+  delay(50);
 
-  // Temporary testing configuration.
-  // For production, validate the server certificate.
-  tlsClient.setInsecure();
+  // Initialize RETURN reader
+  returnReader.PCD_Init();
+  delay(50);
 
-  byte version =
-    rfid.PCD_ReadRegister(rfid.VersionReg);
+  Serial.println("ENTRY RC522 initialized.");
+  Serial.println("RETURN RC522 initialized.");
 
-  Serial.print("[RFID] Reader version: 0x");
-  Serial.println(version, HEX);
-
-  if (version == 0x00 || version == 0xFF) {
-
-    Serial.println("[RFID] RC522 communication failed.");
-    Serial.println("Check wiring and 3.3V power.");
-
-  } else {
-
-    Serial.println("[RFID] RC522 initialized.");
-    rfid.PCD_AntennaOn();
-  }
-
-  // Connect WiFi
   connectWiFi();
 
-  // Ready
-  resetSession();
+  Serial.println();
+  Serial.println("SYSTEM READY");
+  Serial.println("ENTRY reader: Borrow books");
+  Serial.println("RETURN reader: Return books");
+  Serial.println("Button: Select next student");
 }
 
-// ================================================
-// MAIN LOOP
-// ================================================
+// =====================================
+// 14. MAIN LOOP
+// =====================================
+
 void loop() {
 
-  pollModeControls();
+  handleButton();
 
-  // Reconnect WiFi if disconnected
   if (WiFi.status() != WL_CONNECTED) {
-
-    static unsigned long lastReconnect = 0;
-
-    if (millis() - lastReconnect > 10000) {
-
-      lastReconnect = millis();
-
-      Serial.println("[WiFi] Reconnecting...");
-
-      WiFi.reconnect();
-    }
-
-    delay(50);
-    return;
+    connectWiFi();
   }
 
-  // Check new RFID card
-  if (!rfid.PICC_IsNewCardPresent()) {
-    delay(30);
-    return;
-  }
+  // Check both readers continuously
+  handleEntryReader();
+  handleReturnReader();
 
-  if (!rfid.PICC_ReadCardSerial()) {
-    delay(30);
-    return;
-  }
-
-  String uid = uidToString();
-
-  unsigned long now = millis();
-
-  // Prevent repeated scans
-  if (
-    uid == lastProcessedUID &&
-    now - lastProcessedTime < SCAN_COOLDOWN_MS
-  ) {
-    rfid.PICC_HaltA();
-    rfid.PCD_StopCrypto1();
-
-    delay(50);
-    return;
-  }
-
-  lastProcessedUID = uid;
-  lastProcessedTime = now;
-
-  Serial.println("[RFID] Card detected!");
-
-  handleCard(uid);
-
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
-
-  delay(100);
+  delay(10);
 }

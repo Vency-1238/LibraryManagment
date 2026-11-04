@@ -40,8 +40,9 @@ dashboard and the hardware API.
   (`studentId` stays immutable so Borrow history remains linked).
 - Books page with category, shelf location, rack number, ISBN, loan period,
   availability, search and category/availability filters, plus edit support.
-- Permanent borrowing history with borrow batch IDs and
-  All / BORROWED / RETURNED / OVERDUE filters.
+- Permanent borrowing history grouped by student (one row per student, all
+  borrowed titles in that row, expandable per-book dates and actions) with
+  borrow batch IDs and All / BORROWED / RETURNED / OVERDUE filters.
 - Scan Activity page backed by the optional `ScanLogs` collection.
 - Insights page: book location finder, most borrowed books, most active
   students, most borrowed categories, last-7-days activity and per-student
@@ -156,6 +157,11 @@ No Author attribute was added.
 Every book gets its own Borrow document. Returning updates that same document;
 it never creates a new one and never deletes history. `OVERDUE` is calculated
 dynamically in the API and UI instead of being written to the database.
+
+The Borrowing History page groups these flat records by `studentId` for display
+only: one student row, one badge per unique book, and an expandable list of the
+individual Borrow documents. Returning a book still updates only that document,
+so no schema change or record merge is involved.
 
 ### ScanLogs (optional new collection)
 

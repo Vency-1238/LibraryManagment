@@ -1269,7 +1269,7 @@ function ScanActivityPage({ scans, students, books }) {
       {!SCAN_COL && (
         <div className="notice">
           <strong>ScanLogs is not configured yet.</strong> Create the ScanLogs collection in
-          Appwrite and set <code>VITE_APPWRITE_SCANLOGS_COLLECTION_ID</code> to start recording
+          Appwrite and set <code>APPWRITE_SCANLOGS_COLLECTION_ID</code> to start recording
           scans. Borrowing and returning still work without it.
         </div>
       )}
