@@ -38,7 +38,8 @@ dashboard and the hardware API.
 - Students page with ACTIVE/INACTIVE status, active-book count and remaining
   capacity (`2 / 4 books borrowed`), plus editing for name, RFID UID and status
   (`studentId` stays immutable so Borrow history remains linked).
-- Books page with category, shelf location, rack number, ISBN, loan period,
+- Books page with category, shelf location, rack number, ISBN, return period in
+  minutes,
   availability, search and category/availability filters, plus edit support.
 - Permanent borrowing history grouped by student (one row per student, all
   borrowed titles in that row, expandable per-book dates and actions) with
@@ -120,6 +121,7 @@ these collections. Existing documents were preserved.
 | `name` | string | Existing |
 | `rfidUID` | string | Existing (8 hex characters) |
 | `status` | string | Existing; required. `ACTIVE` / `INACTIVE` |
+| `depositBalance` | integer | New; starts at 100 and is reduced by overdue penalties |
 | `$createdAt` | datetime | Appwrite built-in registration timestamp |
 
 Existing rows that predated the `status` attribute were backfilled to `ACTIVE`.
@@ -153,10 +155,26 @@ No Author attribute was added.
 | `returnDate` | datetime | Existing optional; stays empty until return |
 | `status` | string | Existing; `BORROWED` / `RETURNED` |
 | `borrowBatchId` | string | Existing; shared by one visit |
+| `overdueDays` | integer | New; whole days late at return time |
+| `penaltyAmount` | integer | New; ₹1 per overdue day |
+| `depositDeducted` | integer | New; amount actually deducted, capped at the remaining deposit |
 
 Every book gets its own Borrow document. Returning updates that same document;
 it never creates a new one and never deletes history. `OVERDUE` is calculated
 dynamically in the API and UI instead of being written to the database.
+When a book is returned late, the API calculates `overdueDays` using the return
+timestamp, charges ₹1 per overdue day, deducts that charge from the student's
+`depositBalance` (never below zero), and stores the charge on the Borrow
+document. A student with no existing balance is treated as having the initial
+₹100 deposit, but the Appwrite attribute must still be created first.
+
+### Required Appwrite schema changes
+
+In the existing **Students** collection, create `depositBalance` as an integer
+attribute, required with default `100`. In the existing **Borrow** collection,
+create `overdueDays`, `penaltyAmount`, and `depositDeducted` as integer
+attributes, optional with default `0`. Run `npm run seed` once after creating
+the attributes to initialize existing students.
 
 The Borrowing History page groups these flat records by `studentId` for display
 only: one student row, one badge per unique book, and an expandable list of the

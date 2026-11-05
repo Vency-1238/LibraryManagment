@@ -11,6 +11,8 @@ import {
 /* ── constants ───────────────────────────────────────────── */
 
 export const MAX_ACTIVE_BOOKS = 3;
+const INITIAL_DEPOSIT = 100;
+const PENALTY_PER_DAY = 1;
 const MAX_BATCH_ID_LENGTH = 64;
 const RACE_RECHECK_ATTEMPTS = 3;
 const RACE_RECHECK_DELAY_MS = 120;
@@ -41,6 +43,13 @@ function loanSortKey(record) {
 
 function sortLoans(records) {
   return [...records].sort((a, b) => loanSortKey(a).localeCompare(loanSortKey(b)));
+}
+
+function overdueDays(dueDate, returnDate) {
+  const due = new Date(dueDate).getTime();
+  const returned = new Date(returnDate).getTime();
+  if (!Number.isFinite(due) || !Number.isFinite(returned) || returned <= due) return 0;
+  return Math.ceil((returned - due) / (24 * 60 * 60 * 1000));
 }
 
 /* The book status is derived from the loan records so a failed request can
@@ -691,10 +700,30 @@ async function returnBook(req, res) {
 
   log.rfidUid = log.rfidUid || book.rfidUID || "";
 
+  const student = await db.findStudentById(active.studentId);
   const returnDate = new Date().toISOString();
-  await db.updateBorrowRecord(active.id, { returnDate, status: "RETURNED" });
+  const lateDays = overdueDays(active.dueDate, returnDate);
+  const penaltyAmount = lateDays * PENALTY_PER_DAY;
+  const previousDeposit = Number.isFinite(Number(student?.depositBalance))
+    ? Math.max(0, Number(student.depositBalance))
+    : INITIAL_DEPOSIT;
+  const depositDeducted = Math.min(previousDeposit, penaltyAmount);
+  const depositBalance = previousDeposit - depositDeducted;
+  await db.updateBorrowRecord(active.id, {
+    returnDate,
+    status: "RETURNED",
+    overdueDays: lateDays,
+    penaltyAmount,
+    depositDeducted
+  });
 
+  let depositUpdated = false;
   try {
+    if (!student) {
+      throw new Error(`Student "${active.studentId}" is not registered`);
+    }
+    await db.updateStudent(student.id, { depositBalance });
+    depositUpdated = true;
     const remaining = await db.listActiveBorrowingsForBook(active.bookId);
     await db.updateBook(book.id, {
       status: remaining.length ? "BORROWED" : "AVAILABLE"
@@ -704,10 +733,20 @@ async function returnBook(req, res) {
     try {
       await db.updateBorrowRecord(active.id, {
         returnDate: active.returnDate || null,
-        status: active.status
+        status: active.status,
+        overdueDays: active.overdueDays || 0,
+        penaltyAmount: active.penaltyAmount || 0,
+        depositDeducted: active.depositDeducted || 0
       });
     } catch {
       /* The database error is reported below. */
+    }
+    if (depositUpdated) {
+      try {
+        await db.updateStudent(student.id, { depositBalance: previousDeposit });
+      } catch {
+        /* The original balance could not be restored; report the database error. */
+      }
     }
     await logScan({
       ...log,
@@ -718,8 +757,6 @@ async function returnBook(req, res) {
     });
     throw error;
   }
-
-  const student = await db.findStudentById(active.studentId);
 
   await logScan({
     ...log,
@@ -740,7 +777,11 @@ async function returnBook(req, res) {
     issueDate: active.issueDate,
     dueDate: active.dueDate,
     returnDate,
-    status: "RETURNED"
+    status: "RETURNED",
+    overdueDays: lateDays,
+    penaltyAmount,
+    depositDeducted,
+    depositBalance
   });
 }
 

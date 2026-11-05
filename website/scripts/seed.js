@@ -89,9 +89,16 @@ async function findOne(col, field, value) {
 async function upsertStudent(studentId, name, rfidUID) {
   const existing = await findOne(S_COL, "studentId", studentId);
   if (existing) {
-    if (!existing.status) {
-      await call((db) => db.updateDocument(DB, S_COL, existing.$id, { status: "ACTIVE" }));
-      console.log(`  ~ Added missing status to student: ${studentId} — ${name}`);
+    const updates = {};
+    if (!existing.status) updates.status = "ACTIVE";
+    if (existing.depositBalance === undefined || existing.depositBalance === null) {
+      updates.depositBalance = 100;
+    }
+    if (Object.keys(updates).length > 0) {
+      await call((db) => db.updateDocument(DB, S_COL, existing.$id, {
+        ...updates
+      }));
+      console.log(`  ~ Updated student defaults: ${studentId} — ${name}`);
     } else {
       console.log(`  = Student already exists: ${studentId} — ${name}`);
     }
@@ -102,6 +109,7 @@ async function upsertStudent(studentId, name, rfidUID) {
     name,
     rfidUID,
     status: "ACTIVE",
+    depositBalance: 100,
   }));
   console.log(`  + Created student: ${studentId} — ${name}`);
 }

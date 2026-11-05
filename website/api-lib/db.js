@@ -279,6 +279,15 @@ export const deleteStudent = (documentId) =>
     documentId
   ));
 
+export async function updateStudent(documentId, data) {
+  return documentData(await call((databases) => databases.updateDocument(
+    config.databaseId,
+    config.studentsCollectionId,
+    documentId,
+    data
+  )));
+}
+
 export const deleteBook = (documentId) =>
   call((databases) => databases.deleteDocument(
     config.databaseId,

@@ -58,6 +58,7 @@ export const db = {
   addStudent: (data) =>
     databases.createDocument(DB_ID, S_COL, ID.unique(), {
       status: "ACTIVE",
+      depositBalance: 100,
       ...data,
     }),
   updateStudent: (docId, data) =>

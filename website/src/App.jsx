@@ -450,7 +450,7 @@ function StudentsPage({ students, borrowings, onRefresh, toast }) {
         ) : (
           <div className="tbl-wrap">
             <table>
-              <thead><tr><th>Student ID</th><th>Name</th><th>RFID UID</th><th>Status</th><th>Borrowing</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Student ID</th><th>Name</th><th>RFID UID</th><th>Status</th><th>Deposit</th><th>Borrowing</th><th>Actions</th></tr></thead>
               <tbody>
                 {list.map((s) => {
                   const active = activeCounts.get(s.studentId) || 0;
@@ -467,6 +467,7 @@ function StudentsPage({ students, borrowings, onRefresh, toast }) {
                       </td>
                       <td data-label="RFID UID"><code className="uid-chip">{s.rfidUID.match(/.{2}/g)?.join(":")}</code></td>
                       <td data-label="Status"><Badge status={s.status || "ACTIVE"} /></td>
+                      <td data-label="Deposit"><strong>₹{Number.isFinite(Number(s.depositBalance)) ? Number(s.depositBalance) : 100}</strong></td>
                       <td data-label="Borrowing">
                         <div className="borrow-cell">
                           <span className="borrow-line">
@@ -1179,6 +1180,7 @@ function BorrowingsPage({ borrowings, students, books, onRefresh, toast }) {
               <div><span>Issue date</span><strong>{formatDateTime(detail.issueDate)}</strong></div>
               <div><span>Due date</span><strong>{formatDateTime(detail.dueDate)}</strong></div>
               <div><span>Return date</span><strong>{formatDateTime(detail.returnDate)}</strong></div>
+              <div><span>Overdue penalty</span><strong>₹{Number(detail.penaltyAmount) || 0}</strong></div>
             </div>
           </div>
         )}
