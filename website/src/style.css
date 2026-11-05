@@ -710,6 +710,10 @@ tbody tr.borrow-row { cursor: pointer; }
   box-shadow: var(--shadow-lg);
   width: 100%;
   max-width: 460px;
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   animation: mIn 220ms cubic-bezier(.34,1.56,.64,1);
 }
 @keyframes mIn { from { opacity: 0; transform: scale(.92) translateY(12px); } to { opacity: 1; transform: none; } }
@@ -734,7 +738,7 @@ tbody tr.borrow-row { cursor: pointer; }
 }
 .modal-x:hover { background: var(--surface2); color: var(--text); }
 
-.modal-bd { padding: 22px; }
+.modal-bd { padding: 22px; overflow-y: auto; min-height: 0; }
 .modal-ft {
   padding: 14px 22px 18px;
   border-top: 1px solid var(--border);

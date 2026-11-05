@@ -564,7 +564,7 @@ function StudentsPage({ students, borrowings, onRefresh, toast }) {
    BOOKS PAGE
 ══════════════════════════════════════════════════════════ */
 const EMPTY_BOOK_FORM = {
-  id: "", title: "", uid: ["", "", "", ""], days: "14",
+  id: "", title: "", uid: ["", "", "", ""], minutes: "14",
   category: "", shelfLocation: "", rackNumber: "", isbn: "",
 };
 
@@ -606,7 +606,7 @@ function BooksPage({ books, onRefresh, toast }) {
       id: book.bookId,
       title: book.title,
       uid: uidGroups(book.rfidUID),
-      days: String(book.loanPeriod || 14),
+      minutes: String(book.loanPeriod || 14),
       category: book.category || "",
       shelfLocation: book.shelfLocation || "",
       rackNumber: book.rackNumber || "",
@@ -619,8 +619,8 @@ function BooksPage({ books, onRefresh, toast }) {
     e.preventDefault();
     const uid = normalizeUid(form.uid.join(""));
     if (!uid) { toast("RFID UID must be 8 hex characters", "error"); return; }
-    const days = parseInt(form.days, 10);
-    if (!days || days <= 0) { toast("Loan period must be a positive number", "error"); return; }
+    const minutes = parseInt(form.minutes, 10);
+    if (!minutes || minutes <= 0) { toast("Return period must be a positive number of minutes", "error"); return; }
     setSav(true);
     try {
       const uidOwner = await db.findBookByUid(uid);
@@ -632,7 +632,7 @@ function BooksPage({ books, onRefresh, toast }) {
       const metadata = {
         title: form.title.trim(),
         rfidUID: uid,
-        loanPeriod: days,
+        loanPeriod: minutes,
         category: form.category.trim() || null,
         shelfLocation: form.shelfLocation.trim() || null,
         rackNumber: form.rackNumber.trim() || null,
@@ -731,7 +731,7 @@ function BooksPage({ books, onRefresh, toast }) {
                       {b.rackNumber ? <span className="meta-chip">{b.rackNumber}</span> : <span className="muted">—</span>}
                     </td>
                     <td data-label="RFID UID"><code className="uid-chip">{b.rfidUID.match(/.{2}/g)?.join(":")}</code></td>
-                    <td data-label="Loan"><span className="loan-chip">{b.loanPeriod}d</span></td>
+                    <td data-label="Loan"><span className="loan-chip">{b.loanPeriod} min</span></td>
                     <td data-label="Status"><Badge status={b.status} /></td>
                     <td data-label="Actions" className="act-cell">
                       <button className="btn btn-ghost btn-sm" onClick={() => openEdit(b)}>
@@ -782,9 +782,9 @@ function BooksPage({ books, onRefresh, toast }) {
             <UIDInput value={form.uid} onChange={(uid) => setForm((f) => ({ ...f, uid }))} />
           </div>
           <div className="f-fld">
-            <label>Loan Period <span className="f-hint">days</span></label>
-            <input required type="number" min="1" max="365" placeholder="14" value={form.days}
-              onChange={(e) => setForm((f) => ({ ...f, days: e.target.value }))} />
+            <label>Return Period <span className="f-hint">minutes</span></label>
+            <input required type="number" min="1" max="525600" placeholder="14" value={form.minutes}
+              onChange={(e) => setForm((f) => ({ ...f, minutes: e.target.value }))} />
           </div>
           <div className="f-fld">
             <label>Category</label>

@@ -164,7 +164,7 @@ async function findTagByUid(rawUid) {
         id: book.bookId,
         title: book.title,
         uid: book.rfidUID,
-        loan_days: book.loanPeriod,
+        loan_minutes: book.loanPeriod,
         status: book.status,
         category: book.category || null,
         shelf_location: book.shelfLocation || null,
@@ -236,7 +236,7 @@ async function listBooks(req, res) {
     id: book.bookId,
     title: book.title,
     uid: book.rfidUID,
-    loan_days: book.loanPeriod,
+    loan_minutes: book.loanPeriod,
     status: book.status,
     category: book.category || null,
     shelf_location: book.shelfLocation || null,
@@ -298,7 +298,7 @@ async function createBook(req, res) {
   const bookId = normalizeText(body.id, 36);
   const title = normalizeText(body.title, 200);
   const rfidUID = normalizeUid(body.uid);
-  const loanPeriod = Number(body.loan_days);
+  const loanPeriod = Number(body.loan_minutes ?? body.loan_days);
   const category = normalizeText(body.category, 80);
   const shelfLocation = normalizeText(body.shelfLocation, 80);
   const rackNumber = normalizeText(body.rackNumber, 40);
@@ -307,7 +307,7 @@ async function createBook(req, res) {
   if (!bookId || !title || !rfidUID ||
       !Number.isInteger(loanPeriod) || loanPeriod <= 0) {
     return send(res, 400, {
-      error: "Book ID, title, valid RFID UID, and positive loan days are required"
+      error: "Book ID, title, valid RFID UID, and positive return minutes are required"
     });
   }
 
@@ -327,7 +327,7 @@ async function createBook(req, res) {
     id: book.bookId,
     title: book.title,
     uid: book.rfidUID,
-    loan_days: book.loanPeriod,
+    loan_minutes: book.loanPeriod,
     status: book.status,
     category: book.category || null,
     shelf_location: book.shelfLocation || null,
@@ -487,7 +487,7 @@ async function borrow(req, res) {
 
   const issueDate = new Date();
   const dueDate = new Date(issueDate);
-  dueDate.setDate(dueDate.getDate() + loanPeriod);
+  dueDate.setMinutes(dueDate.getMinutes() + loanPeriod);
 
   let record;
   try {
